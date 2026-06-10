@@ -27,10 +27,22 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and
 def parse_date(date_str) -> Optional[date]:
     if not date_str:
         return None
-    try:
-        if isinstance(date_str, str):
-            return datetime.strptime(date_str.split('T')[0], "%Y-%m-%d").date()
+    if isinstance(date_str, date) and not isinstance(date_str, datetime):
         return date_str
+    if isinstance(date_str, datetime):
+        return date_str.date()
+    
+    try:
+        clean_str = str(date_str).replace('T', ' ').strip()
+        date_part = clean_str.split(' ')[0]
+        
+        for fmt in ("%Y-%m-%d", "%m-%d-%Y", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(date_part, fmt).date()
+            except ValueError:
+                continue
+        logger.warning(f"No matching format found for date: {date_str}")
+        return None
     except Exception as e:
         logger.warning(f"Failed to parse date: {date_str} - {str(e)}")
         return None

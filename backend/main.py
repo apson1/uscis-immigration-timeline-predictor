@@ -106,11 +106,12 @@ async def sync_case(request: CaseSyncRequest):
         )
 
     # Sandbox API returns values like: formType, submittedDate, modifiedDate, current_case_status_text_en
-    # Ensure they map properly
-    form_type = uscis_data.get("formType", request.form_type)
-    status_text = uscis_data.get("current_case_status_text_en", "Case Was Received")
-    submitted_date_str = uscis_data.get("submittedDate", request.filed_date)
-    modified_date_str = uscis_data.get("modifiedDate")
+    # nested within the "case_status" key. Ensure they map properly.
+    case_status_data = uscis_data.get("case_status", {})
+    form_type = case_status_data.get("formType", request.form_type)
+    status_text = case_status_data.get("current_case_status_text_en", "Case Was Received")
+    submitted_date_str = case_status_data.get("submittedDate", request.filed_date)
+    modified_date_str = case_status_data.get("modifiedDate")
 
     submitted_date = parse_date(submitted_date_str)
     modified_date = parse_date(modified_date_str)
