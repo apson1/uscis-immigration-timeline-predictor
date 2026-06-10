@@ -3,6 +3,7 @@
 -- Create cases table
 CREATE TABLE IF NOT EXISTS cases (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id VARCHAR(100) NOT NULL,
     form_type VARCHAR(50) NOT NULL, -- e.g., 'I-485', 'I-130', 'I-765'
     receipt_number VARCHAR(100) UNIQUE NOT NULL,
     service_center VARCHAR(100), -- e.g., 'Texas Service Center', 'National Benefits Center'
@@ -14,6 +15,7 @@ CREATE TABLE IF NOT EXISTS cases (
 
 -- Index for quick lookup on receipt numbers and categorization
 CREATE INDEX IF NOT EXISTS idx_cases_receipt_number ON cases(receipt_number);
+CREATE INDEX IF NOT EXISTS idx_cases_user_id ON cases(user_id);
 CREATE INDEX IF NOT EXISTS idx_cases_form_service ON cases(form_type, service_center);
 
 -- Create milestones table to track status history transitions

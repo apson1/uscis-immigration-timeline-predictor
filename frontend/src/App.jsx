@@ -162,9 +162,49 @@ export default function App() {
 
   // Active predictions data based on selected case
   const [predictionData, setPredictionData] = useState(null);
+  const [compareServiceCenter, setCompareServiceCenter] = useState('');
+  const [comparePredictionData, setComparePredictionData] = useState(null);
   const [chartTooltip, setChartTooltip] = useState({ x: 0, y: 0, content: '', visible: false });
 
   const selectedCase = cases.find(c => c.id === selectedCaseId);
+
+  // Load cases when toggling Demo Mode or mounting
+  useEffect(() => {
+    if (isDemoMode) {
+      setCases(MOCK_CASES);
+      setSelectedCaseId('case-2');
+      setCompareServiceCenter('');
+    } else {
+      setIsSyncing(true);
+      setErrorMsg('');
+      setSuccessMsg('');
+      fetch(`${BACKEND_URL}/api/cases?user_id=dev_user_1`)
+        .then(res => res.json())
+        .then(data => {
+          if (Array.isArray(data)) {
+            setCases(data);
+            if (data.length > 0) {
+              setSelectedCaseId(data[0].id);
+            } else {
+              setSelectedCaseId(null);
+            }
+          } else {
+            setCases([]);
+            setSelectedCaseId(null);
+          }
+          setCompareServiceCenter('');
+        })
+        .catch(err => {
+          console.error("Error fetching cases:", err);
+          setErrorMsg("Could not connect to database. Falling back to empty state.");
+          setCases([]);
+          setSelectedCaseId(null);
+        })
+        .finally(() => {
+          setIsSyncing(false);
+        });
+    }
+  }, [isDemoMode]);
 
   // Sync calculations whenever selected case changes
   useEffect(() => {
@@ -198,6 +238,36 @@ export default function App() {
         });
     }
   }, [selectedCaseId, cases, isDemoMode]);
+
+  // Sync comparison predictions whenever comparison service center or selected case changes
+  useEffect(() => {
+    if (!selectedCase || !compareServiceCenter) {
+      setComparePredictionData(null);
+      return;
+    }
+
+    if (isDemoMode) {
+      const formPreds = MOCK_PREDICTIONS[selectedCase.form_type];
+      const curve = formPreds ? formPreds[compareServiceCenter] : null;
+      setComparePredictionData(curve);
+    } else {
+      fetch(`${BACKEND_URL}/api/predictions?form_type=${selectedCase.form_type}&service_center=${compareServiceCenter}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.has_data) {
+            setComparePredictionData(data);
+          } else {
+            setComparePredictionData(null);
+          }
+        })
+        .catch(err => {
+          console.error("Error fetching comparison predictions:", err);
+          const formPreds = MOCK_PREDICTIONS[selectedCase.form_type];
+          const curve = formPreds ? formPreds[compareServiceCenter] : null;
+          setComparePredictionData(curve);
+        });
+    }
+  }, [compareServiceCenter, selectedCase, isDemoMode]);
 
   // Handle case form submission (Sync)
   const handleSyncCase = async (e) => {
@@ -281,6 +351,57 @@ export default function App() {
     }
   };
 
+  // Handle manual case refresh/sync
+  const handleRefreshCase = async (caseToSync) => {
+    if (!caseToSync) return;
+    
+    setIsSyncing(true);
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    if (isDemoMode) {
+      // Simulation for mock refresh
+      setTimeout(() => {
+        setSuccessMsg(`Mock Sandbox sync completed for ${caseToSync.receipt_number}!`);
+        setIsSyncing(false);
+      }, 1000);
+    } else {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/cases/sync`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            receipt_number: caseToSync.receipt_number,
+            user_id: caseToSync.user_id || 'dev_user_1',
+            form_type: caseToSync.form_type,
+            service_center: caseToSync.service_center,
+            filed_date: caseToSync.filed_date
+          })
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.detail || 'Sync failed.');
+        }
+
+        const syncedCase = data.case;
+        // Replace matching case in state
+        const updatedCases = cases.map(c => c.id === syncedCase.id ? syncedCase : c);
+        setCases(updatedCases);
+        setSuccessMsg(`Successfully synced Sandbox receipt ${syncedCase.receipt_number}!`);
+        
+        // Trigger background recalculation
+        fetch(`${BACKEND_URL}/api/analytics/trigger`, { method: 'POST' }).catch(() => {});
+      } catch (err) {
+        setErrorMsg(err.message || 'API Connection error refreshing case.');
+      } finally {
+        setIsSyncing(false);
+      }
+    }
+  };
+
   // Helper: calculate days elapsed
   const calculateDaysElapsed = (filedStr, completedStr) => {
     const start = new Date(filedStr);
@@ -328,7 +449,12 @@ export default function App() {
     }
 
     const points = predictionData.survival_curve_json;
-    const maxDays = points[points.length - 1].days;
+    const comparePoints = comparePredictionData?.survival_curve_json || [];
+
+    const maxDaysMain = points.length > 0 ? points[points.length - 1].days : 0;
+    const maxDaysCompare = comparePoints.length > 0 ? comparePoints[comparePoints.length - 1].days : 0;
+    const maxDays = Math.max(maxDaysMain, maxDaysCompare, 100);
+
     const height = 240;
     const width = 600;
     const paddingLeft = 45;
@@ -342,10 +468,9 @@ export default function App() {
     // Helper: Map days to X coordinate
     const getX = (d) => paddingLeft + (d / maxDays) * chartWidth;
     // Helper: Map probability (0.0 to 1.0) to Y coordinate
-    // Note: Y coordinates are inverted in SVG (0 is top, chartHeight is bottom)
     const getY = (p) => paddingTop + chartHeight - p * chartHeight;
 
-    // Build SVG Path string
+    // Build SVG Path string for Main Curve
     let pathD = `M ${getX(points[0].days)} ${getY(points[0].probability)}`;
     let areaD = `M ${getX(points[0].days)} ${getY(0)}`; // Bottom left
 
@@ -356,23 +481,30 @@ export default function App() {
 
     areaD += ` L ${getX(points[points.length - 1].days)} ${getY(0)} Z`; // Close the polygon
 
-    // Calculate user's current position on the curve
-    const userDays = selectedCase ? calculateDaysElapsed(selectedCase.filed_date, selectedCase.completed_date) : 0;
-    let userX = getX(userDays);
-    let isUserOut = false;
-    if (userDays > maxDays) {
-      userX = getX(maxDays);
-      isUserOut = true;
+    // Build SVG Path string for Comparison Curve
+    let comparePathD = '';
+    if (comparePoints.length > 0) {
+      comparePathD = `M ${getX(comparePoints[0].days)} ${getY(comparePoints[0].probability)}`;
+      comparePoints.forEach(pt => {
+        comparePathD += ` L ${getX(pt.days)} ${getY(pt.probability)}`;
+      });
     }
 
-    // Find user's probability (closest day lookup)
+    // Calculate user's current position on the main curve
+    const userDays = selectedCase ? calculateDaysElapsed(selectedCase.filed_date, selectedCase.completed_date) : 0;
+    let userX = getX(userDays);
+    if (userDays > maxDays) {
+      userX = getX(maxDays);
+    }
+
+    // Find user's probability (closest day lookup on main curve)
     const closestPoint = points.reduce((prev, curr) => {
       return (Math.abs(curr.days - userDays) < Math.abs(prev.days - userDays) ? curr : prev);
     });
     const userProbY = getY(closestPoint.probability);
 
     return (
-      <div className="chart-container" style={{ position: 'relative' }}>
+      <div className="chart-container" style={{ position: 'relative', height: 'auto' }}>
         <svg viewBox={`0 0 ${width} ${height}`} className="chart-svg">
           <defs>
             <linearGradient id="chart-gradient" x1="0" y1="0" x2="1" y2="0">
@@ -380,7 +512,7 @@ export default function App() {
               <stop offset="100%" stopColor="var(--secondary)" />
             </linearGradient>
             <linearGradient id="area-gradient" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="var(--primary)" stopOpacity="0.3" />
+              <stop offset="0%" stopColor="var(--primary)" stopOpacity="0.25" />
               <stop offset="100%" stopColor="var(--bg-dark)" stopOpacity="0.0" />
             </linearGradient>
           </defs>
@@ -416,11 +548,23 @@ export default function App() {
           {/* X Axis line */}
           <line x1={paddingLeft} y1={height - paddingBottom} x2={width - paddingRight} y2={height - paddingBottom} className="chart-axis-line" />
 
-          {/* Area & Line */}
+          {/* Area & Main Curve Line */}
           <path d={areaD} className="chart-area" />
           <path d={pathD} className="chart-line" />
 
-          {/* Median Wait Line indicator */}
+          {/* Comparison Curve Line */}
+          {comparePathD && (
+            <path 
+              d={comparePathD} 
+              fill="none" 
+              stroke="var(--secondary)" 
+              strokeWidth="2.5" 
+              strokeDasharray="4 4"
+              style={{ filter: 'drop-shadow(0 0 4px rgba(168, 85, 247, 0.4))' }}
+            />
+          )}
+
+          {/* Median Wait Line indicator (Main Curve) */}
           {predictionData.median_wait_days && (
             <g>
               <line 
@@ -428,18 +572,44 @@ export default function App() {
                 y1={paddingTop} 
                 x2={getX(predictionData.median_wait_days)} 
                 y2={height - paddingBottom} 
-                stroke="var(--status-rfe)"
+                stroke="var(--primary)"
                 strokeWidth="1.5"
                 strokeDasharray="3 3"
+                opacity="0.75"
               />
               <text 
                 x={getX(predictionData.median_wait_days) + 5} 
                 y={paddingTop + 15} 
-                fill="var(--status-rfe)" 
+                fill="var(--primary)" 
                 fontSize="0.75rem"
                 fontWeight="600"
               >
                 Median: {predictionData.median_wait_days}d
+              </text>
+            </g>
+          )}
+
+          {/* Median Wait Line indicator (Comparison Curve) */}
+          {comparePredictionData && comparePredictionData.median_wait_days && (
+            <g>
+              <line 
+                x1={getX(comparePredictionData.median_wait_days)} 
+                y1={paddingTop} 
+                x2={getX(comparePredictionData.median_wait_days)} 
+                y2={height - paddingBottom} 
+                stroke="var(--secondary)"
+                strokeWidth="1.5"
+                strokeDasharray="3 3"
+                opacity="0.75"
+              />
+              <text 
+                x={getX(comparePredictionData.median_wait_days) + 5} 
+                y={paddingTop + 30} 
+                fill="var(--secondary)" 
+                fontSize="0.75rem"
+                fontWeight="600"
+              >
+                Compare Median: {comparePredictionData.median_wait_days}d
               </text>
             </g>
           )}
@@ -495,12 +665,39 @@ export default function App() {
               left: `${chartTooltip.x}px`, 
               top: `${chartTooltip.y}px`,
               transform: 'translateX(-50%)',
-              transition: 'all 0.1s ease'
+              transition: 'all 0.1s ease',
+              zIndex: 10
             }}
           >
             {chartTooltip.content}
           </div>
         )}
+
+        {/* Legend */}
+        <div style={{ display: 'flex', gap: '1.5rem', justifyContent: 'center', marginTop: '1.2rem', padding: '0.5rem 0', flexWrap: 'wrap', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <span style={{ display: 'inline-block', width: '12px', height: '12px', background: 'var(--primary)', borderRadius: '2px' }} />
+            <span style={{ color: '#fff', fontSize: '0.8rem', fontWeight: '500' }}>
+              {predictionData.service_center}
+            </span>
+          </div>
+          {comparePredictionData && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <span style={{ display: 'inline-block', width: '14px', height: '0px', borderTop: '2.5px dashed var(--secondary)' }} />
+              <span style={{ color: '#fff', fontSize: '0.8rem', fontWeight: '500' }}>
+                {comparePredictionData.service_center} (Comparison)
+              </span>
+            </div>
+          )}
+          {selectedCase && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <span style={{ display: 'inline-block', width: '8px', height: '8px', border: '1px solid #fff', borderRadius: '50%', background: 'var(--secondary)' }} />
+              <span style={{ color: '#fff', fontSize: '0.8rem', fontWeight: '500' }}>
+                Your Progress ({userDays} days elapsed)
+              </span>
+            </div>
+          )}
+        </div>
       </div>
     );
   };
@@ -655,7 +852,29 @@ export default function App() {
                   >
                     <div className="case-item-header">
                       <span className="case-item-title">{c.form_type} - {c.receipt_number}</span>
-                      {renderStatusBadge(c.current_status)}
+                      <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                        {renderStatusBadge(c.current_status)}
+                        <button
+                          className="btn btn-secondary"
+                          style={{
+                            padding: '0.2rem',
+                            width: '24px',
+                            height: '24px',
+                            borderRadius: '4px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRefreshCase(c);
+                          }}
+                          title="Sync/Refresh milestones"
+                          disabled={isSyncing}
+                        >
+                          <RefreshCw size={12} className={isSyncing && isActive ? "spin" : ""} style={{ animation: isSyncing && isActive ? 'spin 1.5s linear infinite' : 'none' }} />
+                        </button>
+                      </div>
                     </div>
                     <div className="case-item-detail">
                       <span>{c.service_center}</span>
@@ -702,7 +921,7 @@ export default function App() {
             {selectedCase ? (
               <>
                 {/* Visual Metadata banner */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-card)', paddingBottom: '1rem', marginBottom: '1.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-card)', paddingBottom: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
                   <div>
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Filing Category</span>
                     <h3 style={{ color: '#fff', fontFamily: 'var(--font-heading)' }}>{selectedCase.form_type}</h3>
@@ -714,6 +933,23 @@ export default function App() {
                   <div>
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Office Location</span>
                     <h3 style={{ color: '#fff', fontFamily: 'var(--font-heading)' }}>{selectedCase.service_center}</h3>
+                  </div>
+                  <div>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Compare with Center</span>
+                    <div style={{ marginTop: '0.2rem' }}>
+                      <select 
+                        className="form-select" 
+                        style={{ padding: '0.3rem 0.5rem', fontSize: '0.8rem', width: 'auto', background: 'rgba(31, 41, 55, 0.6)' }}
+                        value={compareServiceCenter}
+                        onChange={(e) => setCompareServiceCenter(e.target.value)}
+                      >
+                        <option value="">None (Single Center)</option>
+                        <option value="National Benefits Center">National Benefits Center</option>
+                        <option value="Texas Service Center">Texas Service Center</option>
+                        <option value="California Service Center">California Service Center</option>
+                        <option value="Nebraska Service Center">Nebraska Service Center</option>
+                      </select>
+                    </div>
                   </div>
                 </div>
 

@@ -80,6 +80,22 @@ async def get_predictions(
         logger.error(f"Error fetching predictions: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error retrieving predictions.")
 
+@app.get("/api/cases")
+async def get_cases(user_id: str = Query(..., description="User ID to fetch cases for")):
+    """Fetches all tracked cases for a specific user, including their milestones."""
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database client not configured.")
+        
+    try:
+        response = supabase.table("cases")\
+            .select("*, milestones(*)")\
+            .eq("user_id", user_id)\
+            .execute()
+        return response.data
+    except Exception as e:
+        logger.error(f"Error fetching cases: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
 @app.post("/api/cases/sync")
 async def sync_case(request: CaseSyncRequest):
     """
@@ -173,10 +189,19 @@ async def sync_case(request: CaseSyncRequest):
                 "event_date": str(modified_date or "now()")
             }, on_conflict="case_id,milestone_type").execute()
 
+        # Fetch the complete case with milestones
+        full_case_response = supabase.table("cases")\
+            .select("*, milestones(*)")\
+            .eq("id", case_id)\
+            .execute()
+
+        if not full_case_response.data:
+            raise HTTPException(status_code=500, detail="Failed to retrieve complete case data.")
+
         # Return updated case info
         return {
             "success": True,
-            "case": case_response.data[0]
+            "case": full_case_response.data[0]
         }
 
     except Exception as e:
