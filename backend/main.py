@@ -208,6 +208,184 @@ async def sync_case(request: CaseSyncRequest):
         logger.error(f"Error writing to database: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
+class DetailedImportRequest(BaseModel):
+    user_id: str
+    service_center: str
+    payload: dict
+
+@app.post("/api/cases/import-detailed")
+async def import_detailed_case(request: DetailedImportRequest):
+    """
+    Imports a raw JSON payload extracted from my.uscis.gov internal API.
+    """
+    from datetime import date
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database client not configured.")
+        
+    payload = request.payload
+    if "data" in payload:
+        payload = payload["data"]
+        
+    # Heuristics to extract data from various USCIS JSON shapes
+    receipt_num = payload.get("receiptNumber") or payload.get("receipt_number")
+    if not receipt_num:
+        raise HTTPException(status_code=400, detail="Could not find a receipt number in the JSON.")
+        
+    form_type = payload.get("formType") or payload.get("form_type") or "Unknown"
+    
+    # Sometimes it's nested in caseStatus
+    case_status_obj = payload.get("caseStatus", {}) if isinstance(payload.get("caseStatus"), dict) else {}
+    status_text = case_status_obj.get("statusText") or payload.get("current_case_status_text_en") or payload.get("status")
+    
+    submitted_date_str = payload.get("submissionDate") or payload.get("submittedDate") or payload.get("receiptDate")
+    submitted_date = parse_date(submitted_date_str) if submitted_date_str else None
+    
+    # Extract detailed milestones
+    milestones_to_save = {}
+    
+    # 1. RECEIVED
+    if submitted_date:
+        milestones_to_save["RECEIVED"] = submitted_date
+        
+    # 2. evidenceRequests
+    evidence_reqs = payload.get("evidenceRequests") or []
+    if isinstance(evidence_reqs, list):
+        for req in evidence_reqs:
+            action_type = req.get("actionType")
+            if action_type in ("Request for Evidence", "Request for Additional Evidence"):
+                sent_date_str = req.get("generationDate") or req.get("createdAt")
+                sent_date = parse_date(sent_date_str)
+                if sent_date:
+                    milestones_to_save["RFE_SENT"] = sent_date
+                    
+            response_date_str = req.get("latestResponseDate")
+            is_responded = req.get("isRespondedTo") or (req.get("responseCount", 0) > 0)
+            if response_date_str or is_responded:
+                resp_date = parse_date(response_date_str) if response_date_str else None
+                if resp_date:
+                    milestones_to_save["RFE_RESPONSE"] = resp_date
+                    
+    # 3. notices
+    notices = payload.get("notices") or []
+    if isinstance(notices, list):
+        for notice in notices:
+            action_type = notice.get("actionType")
+            if action_type == "Appointment Scheduled":
+                appt_date_str = notice.get("appointmentDateTime") or notice.get("generationDate")
+                appt_date = parse_date(appt_date_str)
+                if appt_date:
+                    milestones_to_save["BIOMETRICS"] = appt_date
+                    
+    # 4. events
+    events = payload.get("events") or []
+    if isinstance(events, list):
+        for event in events:
+            code = event.get("eventCode")
+            evt_date_str = event.get("eventDateTime") or event.get("createdAt")
+            evt_date = parse_date(evt_date_str)
+            if evt_date:
+                if code in ("FTA0", "IKA"):
+                    milestones_to_save["BIOMETRICS"] = evt_date
+                elif code == "HA":
+                    milestones_to_save["RFE_RESPONSE"] = evt_date
+                elif code in ("APPROVED", "APPR", "Approved", "Card Was Produced", "Case Approved"):
+                    milestones_to_save["APPROVED"] = evt_date
+                elif code in ("DENIED", "DENY", "Denied"):
+                    milestones_to_save["DENIED"] = evt_date
+                    
+    # Scan standard history if present
+    history = payload.get("caseHistory") or payload.get("caseActions") or payload.get("history") or []
+    if history and isinstance(history, list):
+        for item in history:
+            action_date = item.get("date") or item.get("actionDate")
+            action_desc = item.get("description") or item.get("action") or item.get("statusText")
+            if action_date and action_desc:
+                parsed_action_date = parse_date(action_date)
+                if parsed_action_date:
+                    desc_lower = action_desc.lower()
+                    if "fingerprint" in desc_lower or "biometrics" in desc_lower:
+                        milestones_to_save["BIOMETRICS"] = parsed_action_date
+                    elif "rfe" in desc_lower or "request for evidence" in desc_lower:
+                        if "received" in desc_lower or "response" in desc_lower:
+                            milestones_to_save["RFE_RESPONSE"] = parsed_action_date
+                        else:
+                            milestones_to_save["RFE_SENT"] = parsed_action_date
+                    elif "approve" in desc_lower:
+                        milestones_to_save["APPROVED"] = parsed_action_date
+                    elif "deny" in desc_lower or "reject" in desc_lower:
+                        milestones_to_save["DENIED"] = parsed_action_date
+                    else:
+                        milestones_to_save[action_desc[:50]] = parsed_action_date
+
+    # Fallback to RECEIVED if not present
+    if "RECEIVED" not in milestones_to_save:
+        milestones_to_save["RECEIVED"] = submitted_date or date.today()
+
+    # Deduce current status
+    if not status_text or status_text == "Unknown":
+        status_text = "Case Was Received"
+        if "APPROVED" in milestones_to_save:
+            status_text = "Case Was Approved"
+        elif "DENIED" in milestones_to_save:
+            status_text = "Case Was Denied"
+        elif "RFE_RESPONSE" in milestones_to_save:
+            status_text = "Response To USCIS' Request For Evidence Was Received"
+        elif "BIOMETRICS" in milestones_to_save:
+            bio_date = milestones_to_save["BIOMETRICS"]
+            if bio_date > date.today():
+                status_text = "Biometrics Appointment Scheduled"
+            else:
+                status_text = "Case Was Updated To Show Fingerprints Were Taken"
+        elif "RFE_SENT" in milestones_to_save:
+            status_text = "Request for Additional Evidence Was Sent"
+
+    is_completed = "APPROVED" in milestones_to_save or "DENIED" in milestones_to_save
+    completed_date = milestones_to_save.get("APPROVED") or milestones_to_save.get("DENIED")
+
+    # 1. Upsert Case
+    case_record = {
+        "user_id": request.user_id,
+        "form_type": form_type,
+        "receipt_number": receipt_num,
+        "service_center": request.service_center,
+        "filed_date": str(milestones_to_save["RECEIVED"]),
+        "current_status": status_text,
+        "last_sync_date": "now()",
+        "completed_date": str(completed_date) if completed_date else None
+    }
+    
+    try:
+        case_response = supabase.table("cases").upsert(
+            case_record,
+            on_conflict="receipt_number"
+        ).execute()
+        
+        if not case_response.data:
+            raise HTTPException(status_code=500, detail="Failed to write case.")
+            
+        case_id = case_response.data[0]["id"]
+        
+        # 2. Insert milestones
+        for milestone_type, event_date in milestones_to_save.items():
+            supabase.table("milestones").upsert({
+                "case_id": case_id,
+                "milestone_type": milestone_type,
+                "event_date": str(event_date)
+            }, on_conflict="case_id,milestone_type").execute()
+            
+        full_case_response = supabase.table("cases")\
+            .select("*, milestones(*)")\
+            .eq("id", case_id)\
+            .execute()
+            
+        return {
+            "success": True,
+            "case": full_case_response.data[0]
+        }
+    except Exception as e:
+        logger.error(f"Error importing detailed case: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
 @app.post("/api/analytics/trigger")
 async def trigger_analytics(background_tasks: BackgroundTasks):
     """Triggers the batch calculation process as a background task."""

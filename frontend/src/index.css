@@ -25,6 +25,21 @@
   --status-rfe: #f59e0b;
   --status-approved: #10b981;
   --status-denied: #ef4444;
+
+  --logo-gradient: linear-gradient(135deg, #fff 0%, #a5b4fc 50%, #c084fc 100%);
+}
+
+:root.light {
+  --bg-dark: #f8fafc;
+  --bg-card: rgba(255, 255, 255, 0.75);
+  --border-card: rgba(0, 0, 0, 0.1);
+  --border-glow: rgba(99, 102, 241, 0.25);
+  
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  
+  --logo-gradient: linear-gradient(135deg, #1e1b4b 0%, #4338ca 50%, #7e22ce 100%);
 }
 
 * {
@@ -44,6 +59,7 @@ body {
     radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.08) 0%, transparent 40%),
     radial-gradient(circle at 90% 80%, rgba(168, 85, 247, 0.06) 0%, transparent 40%);
   background-attachment: fixed;
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 /* Scrollbar Styling */
@@ -84,9 +100,10 @@ body {
   font-size: 2.2rem;
   font-weight: 800;
   letter-spacing: -0.5px;
-  background: linear-gradient(135deg, #fff 0%, #a5b4fc 50%, #c084fc 100%);
+  background: var(--logo-gradient);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+  transition: all 0.3s ease;
 }
 
 .logo-section p {
@@ -134,7 +151,7 @@ body {
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  color: #fff;
+  color: var(--text-primary);
 }
 
 /* Form Styles */
@@ -157,7 +174,7 @@ body {
   border-radius: 8px;
   padding: 0.75rem 1rem;
   font-family: var(--font-body);
-  color: #fff;
+  color: var(--text-primary);
   font-size: 0.9rem;
   transition: all 0.2s ease;
 }
@@ -187,7 +204,7 @@ body {
 
 .btn-primary {
   background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
-  color: #fff;
+  color: #ffffff;
   box-shadow: 0 4px 14px 0 rgba(99, 102, 241, 0.4);
 }
 
@@ -256,7 +273,7 @@ body {
   font-family: var(--font-heading);
   font-size: 1.8rem;
   font-weight: 700;
-  color: #fff;
+  color: var(--text-primary);
   margin-bottom: 0.2rem;
 }
 
@@ -318,7 +335,7 @@ body {
 
 .timeline-title {
   font-weight: 600;
-  color: #fff;
+  color: var(--text-primary);
 }
 
 .timeline-date {
@@ -415,7 +432,7 @@ body {
 
 .tab-btn.active {
   background: var(--primary);
-  color: #fff;
+  color: #ffffff;
   font-weight: 600;
 }
 
@@ -455,7 +472,7 @@ body {
 .case-item-title {
   font-weight: 600;
   font-size: 0.95rem;
-  color: #fff;
+  color: var(--text-primary);
 }
 
 .case-item-detail {

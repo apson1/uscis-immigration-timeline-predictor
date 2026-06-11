@@ -12,8 +12,13 @@ import {
   ChevronRight, 
   Activity, 
   TrendingUp, 
-  ShieldAlert 
+  ShieldAlert,
+  Moon,
+  Sun,
+  Share2,
+  Bell
 } from 'lucide-react';
+import html2canvas from 'html2canvas';
 
 // Setup environment URLs (FastAPI backend)
 const BACKEND_URL = 'http://127.0.0.1:8000';
@@ -141,19 +146,97 @@ const MOCK_PREDICTIONS = {
   }
 };
 
+const MOCK_HEATMAP_DATA = [
+  { month: "Jan 2025", wait_days: 180 },
+  { month: "Feb 2025", wait_days: 210 },
+  { month: "Mar 2025", wait_days: 245 },
+  { month: "Apr 2025", wait_days: 220 },
+  { month: "May 2025", wait_days: 200 },
+  { month: "Jun 2025", wait_days: 190 },
+  { month: "Jul 2025", wait_days: 175 },
+  { month: "Aug 2025", wait_days: 160 },
+  { month: "Sep 2025", wait_days: 155 },
+  { month: "Oct 2025", wait_days: 180 },
+  { month: "Nov 2025", wait_days: 230 },
+  { month: "Dec 2025", wait_days: 250 }
+];
+
 export default function App() {
   const [isDemoMode, setIsDemoMode] = useState(true);
+  const [isLightMode, setIsLightMode] = useState(false);
   const [activeTab, setActiveTab] = useState('timeline'); // 'timeline' or 'predictions'
+  
+  // Theme Toggle Effect
+  useEffect(() => {
+    if (isLightMode) {
+      document.documentElement.classList.add('light');
+    } else {
+      document.documentElement.classList.remove('light');
+    }
+  }, [isLightMode]);
+
+  // Request Notification Permission on mount
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  const notifyUser = (title, body) => {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification(title, { body });
+    }
+  };
+
+  const handleShareTimeline = async () => {
+    const element = document.getElementById('timeline-capture-area');
+    if (!element) return;
+    try {
+      const canvas = await html2canvas(element, {
+        backgroundColor: isLightMode ? '#f8fafc' : '#0b0c10',
+        scale: 2
+      });
+      const dataUrl = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.download = `uscis-timeline-${selectedCase?.receipt_number || 'export'}.png`;
+      link.href = dataUrl;
+      link.click();
+    } catch (err) {
+      console.error('Failed to capture timeline', err);
+    }
+  };
   
   // State for user cases
   const [cases, setCases] = useState(MOCK_CASES);
   const [selectedCaseId, setSelectedCaseId] = useState('case-2'); // default to pending I-765
   
+  // Feed State
+  const [feedItems, setFeedItems] = useState([
+    "MSC2690... just got Approved!",
+    "SRC2690... scheduled for Biometrics",
+    "LIN2690... New Card Is Being Produced"
+  ]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const statuses = ["Approved!", "scheduled for Biometrics", "New Card Is Being Produced", "Case Was Received", "RFE Sent"];
+      const centers = ["MSC", "SRC", "LIN", "WAC", "EAC"];
+      const randomStatus = statuses[Math.floor(Math.random() * statuses.length)];
+      const randomCenter = centers[Math.floor(Math.random() * centers.length)];
+      const id = `${randomCenter}${Math.floor(Math.random() * 90000) + 10000}...`;
+      
+      setFeedItems(prev => [`${id} ${randomStatus}`, ...prev].slice(0, 5));
+    }, 8000);
+    return () => clearInterval(interval);
+  }, []);
+
   // Form State
   const [formType, setFormType] = useState('I-485');
   const [receiptNumber, setReceiptNumber] = useState('');
   const [serviceCenter, setServiceCenter] = useState('National Benefits Center');
   const [filedDate, setFiledDate] = useState('');
+  const [syncTab, setSyncTab] = useState('sandbox'); // 'sandbox' or 'import'
+  const [rawJsonText, setRawJsonText] = useState('');
   
   // Loading & Error States
   const [isSyncing, setIsSyncing] = useState(false);
@@ -269,13 +352,14 @@ export default function App() {
     }
   }, [compareServiceCenter, selectedCase, isDemoMode]);
 
-  // Handle case form submission (Sync)
   const handleSyncCase = async (e) => {
     e.preventDefault();
-    if (!receiptNumber || !filedDate) {
-      setErrorMsg('Please fill in both Receipt Number and Filed Date.');
+    if (!receiptNumber) {
+      setErrorMsg('Please fill in the Receipt Number.');
       return;
     }
+
+    const finalFiledDate = filedDate || new Date().toISOString().split('T')[0];
 
     setErrorMsg('');
     setSuccessMsg('');
@@ -290,12 +374,12 @@ export default function App() {
           form_type: formType,
           receipt_number: receiptNumber.toUpperCase(),
           service_center: serviceCenter,
-          filed_date: filedDate,
+          filed_date: finalFiledDate,
           current_status: 'Case Was Received',
           completed_date: null,
           last_sync_date: new Date().toISOString(),
           milestones: [
-            { milestone_type: 'RECEIVED', event_date: filedDate }
+            { milestone_type: 'RECEIVED', event_date: finalFiledDate }
           ]
         };
 
@@ -303,6 +387,7 @@ export default function App() {
         setSelectedCaseId(newId);
         setReceiptNumber('');
         setSuccessMsg(`Successfully synced mock Sandbox receipt ${newCase.receipt_number}!`);
+        notifyUser('USCIS Update', `Mock case ${newCase.receipt_number} synced. Status: ${newCase.current_status}`);
         setIsSyncing(false);
       }, 1500);
     } else {
@@ -318,7 +403,7 @@ export default function App() {
             user_id: 'dev_user_1', // Single-user profile sandbox mode
             form_type: formType,
             service_center: serviceCenter,
-            filed_date: filedDate
+            filed_date: finalFiledDate
           })
         });
 
@@ -339,8 +424,203 @@ export default function App() {
         
         setReceiptNumber('');
         setSuccessMsg(`Successfully connected to USCIS Sandbox. Sync complete!`);
+        notifyUser('USCIS Update', `Case ${fetchedCase.receipt_number} synced. Status: ${fetchedCase.current_status}`);
         
         // Trigger background recalculation in case database changes
+        fetch(`${BACKEND_URL}/api/analytics/trigger`, { method: 'POST' }).catch(() => {});
+        
+      } catch (err) {
+        setErrorMsg(err.message || 'API Connection refused. Ensure FastAPI server is running.');
+      } finally {
+        setIsSyncing(false);
+      }
+    }
+  };
+
+  const handleImportDetailedCase = async (e) => {
+    e.preventDefault();
+    if (!rawJsonText.trim()) {
+      setErrorMsg('Please paste the raw JSON text from my.uscis.gov.');
+      return;
+    }
+
+    let parsedPayload;
+    try {
+      parsedPayload = JSON.parse(rawJsonText.trim());
+    } catch (err) {
+      setErrorMsg('Invalid JSON format. Please paste a valid JSON document.');
+      return;
+    }
+
+    setErrorMsg('');
+    setSuccessMsg('');
+    setIsSyncing(true);
+
+    if (isDemoMode) {
+      setTimeout(() => {
+        const dataObj = parsedPayload.data || parsedPayload;
+        const receipt = dataObj.receiptNumber || dataObj.receipt_number || `IOE${Date.now()}`;
+        const fType = dataObj.formType || dataObj.form_type || 'I-485';
+        const sDate = dataObj.submissionDate || dataObj.submittedDate || dataObj.receiptDate || new Date().toISOString().split('T')[0];
+        const newId = `case-${Date.now()}`;
+        
+        // We collect milestone event dates into a map to deduplicate by milestone_type
+        const milestoneMap = {};
+        
+        // 1. RECEIVED
+        milestoneMap["RECEIVED"] = sDate;
+        
+        // 2. evidenceRequests
+        const evidenceReqs = dataObj.evidenceRequests || [];
+        evidenceReqs.forEach(req => {
+          const actionType = req.actionType;
+          if (actionType === "Request for Evidence" || actionType === "Request for Additional Evidence") {
+            const sentDate = req.generationDate || req.createdAt;
+            if (sentDate) {
+              milestoneMap["RFE_SENT"] = sentDate.split('T')[0];
+            }
+          }
+          if (req.latestResponseDate) {
+            milestoneMap["RFE_RESPONSE"] = req.latestResponseDate.split('T')[0];
+          } else if (req.isRespondedTo || (req.responseCount || 0) > 0) {
+            milestoneMap["RFE_RESPONSE"] = new Date().toISOString().split('T')[0];
+          }
+        });
+        
+        // 3. notices
+        const notices = dataObj.notices || [];
+        notices.forEach(n => {
+          if (n.actionType === "Appointment Scheduled") {
+            const apptDate = n.appointmentDateTime || n.generationDate;
+            if (apptDate) {
+              milestoneMap["BIOMETRICS"] = apptDate.split('T')[0];
+            }
+          }
+        });
+        
+        // 4. events
+        const events = dataObj.events || [];
+        events.forEach(e => {
+          const code = e.eventCode;
+          const evtDate = e.eventDateTime || e.createdAt || e.eventTimestamp;
+          if (evtDate) {
+            const cleanDate = evtDate.split('T')[0];
+            if (code === "FTA0" || code === "IKA") {
+              milestoneMap["BIOMETRICS"] = cleanDate;
+            } else if (code === "HA") {
+              milestoneMap["RFE_RESPONSE"] = cleanDate;
+            } else if (["APPROVED", "APPR", "Approved", "Card Was Produced", "Case Approved"].includes(code)) {
+              milestoneMap["APPROVED"] = cleanDate;
+            } else if (["DENIED", "DENY", "Denied"].includes(code)) {
+              milestoneMap["DENIED"] = cleanDate;
+            }
+          }
+        });
+        
+        // 5. history
+        const history = dataObj.caseHistory || dataObj.caseActions || dataObj.history || [];
+        history.forEach(item => {
+          const actionDate = item.date || item.actionDate;
+          const actionDesc = item.description || item.action || item.statusText;
+          if (actionDate && actionDesc) {
+            const cleanDate = actionDate.split('T')[0];
+            const descLower = actionDesc.toLowerCase();
+            if (descLower.includes("fingerprint") || descLower.includes("biometrics")) {
+              milestoneMap["BIOMETRICS"] = cleanDate;
+            } else if (descLower.includes("rfe") || descLower.includes("request for evidence")) {
+              if (descLower.includes("received") || descLower.includes("response")) {
+                milestoneMap["RFE_RESPONSE"] = cleanDate;
+              } else {
+                milestoneMap["RFE_SENT"] = cleanDate;
+              }
+            } else if (descLower.includes("approve")) {
+              milestoneMap["APPROVED"] = cleanDate;
+            } else if (descLower.includes("deny") || descLower.includes("reject")) {
+              milestoneMap["DENIED"] = cleanDate;
+            }
+          }
+        });
+        
+        // Convert map to milestones array
+        const milestones = Object.keys(milestoneMap).map(type => ({
+          milestone_type: type,
+          event_date: milestoneMap[type]
+        }));
+        
+        // Deduce current status
+        const caseStatusObj = dataObj.caseStatus || {};
+        let statusText = caseStatusObj.statusText || dataObj.current_case_status_text_en || dataObj.status || "Unknown";
+        
+        if (statusText === "Unknown") {
+          statusText = "Case Was Received";
+          if (milestoneMap["APPROVED"]) {
+            statusText = "Case Was Approved";
+          } else if (milestoneMap["DENIED"]) {
+            statusText = "Case Was Denied";
+          } else if (milestoneMap["RFE_RESPONSE"]) {
+            statusText = "Response To USCIS' Request For Evidence Was Received";
+          } else if (milestoneMap["BIOMETRICS"]) {
+            const bioDate = new Date(milestoneMap["BIOMETRICS"]);
+            if (bioDate > new Date()) {
+              statusText = "Biometrics Appointment Scheduled";
+            } else {
+              statusText = "Case Was Updated To Show Fingerprints Were Taken";
+            }
+          } else if (milestoneMap["RFE_SENT"]) {
+            statusText = "Request for Additional Evidence Was Sent";
+          }
+        }
+        
+        const completedDate = milestoneMap["APPROVED"] || milestoneMap["DENIED"] || null;
+
+        const newCase = {
+          id: newId,
+          form_type: fType,
+          receipt_number: receipt.toUpperCase(),
+          service_center: serviceCenter,
+          filed_date: sDate,
+          current_status: statusText,
+          completed_date: completedDate,
+          last_sync_date: new Date().toISOString(),
+          milestones: milestones
+        };
+
+        setCases([newCase, ...cases]);
+        setSelectedCaseId(newId);
+        setRawJsonText('');
+        setSuccessMsg(`Successfully imported mock case ${newCase.receipt_number}!`);
+        notifyUser('USCIS Import', `Mock case ${newCase.receipt_number} imported successfully.`);
+        setIsSyncing(false);
+      }, 1500);
+    } else {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/cases/import-detailed`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            user_id: 'dev_user_1',
+            service_center: serviceCenter,
+            payload: parsedPayload
+          })
+        });
+
+        const data = await response.json();
+        
+        if (!response.ok) {
+          throw new Error(data.detail || 'Import failed.');
+        }
+
+        const fetchedCase = data.case;
+        const updatedCases = cases.filter(c => c.receipt_number !== fetchedCase.receipt_number);
+        setCases([fetchedCase, ...updatedCases]);
+        setSelectedCaseId(fetchedCase.id);
+        
+        setRawJsonText('');
+        setSuccessMsg(`Successfully imported case ${fetchedCase.receipt_number} from my.uscis.gov JSON!`);
+        notifyUser('USCIS Import', `Case ${fetchedCase.receipt_number} imported. Status: ${fetchedCase.current_status}`);
+        
         fetch(`${BACKEND_URL}/api/analytics/trigger`, { method: 'POST' }).catch(() => {});
         
       } catch (err) {
@@ -391,6 +671,7 @@ export default function App() {
         const updatedCases = cases.map(c => c.id === syncedCase.id ? syncedCase : c);
         setCases(updatedCases);
         setSuccessMsg(`Successfully synced Sandbox receipt ${syncedCase.receipt_number}!`);
+        notifyUser('USCIS Update', `Case ${syncedCase.receipt_number} refreshed. Status: ${syncedCase.current_status}`);
         
         // Trigger background recalculation
         fetch(`${BACKEND_URL}/api/analytics/trigger`, { method: 'POST' }).catch(() => {});
@@ -623,7 +904,7 @@ export default function App() {
                 y1={userProbY} 
                 x2={userX} 
                 y2={height - paddingBottom} 
-                stroke="#fff" 
+                stroke={isLightMode ? "var(--text-primary)" : "#fff"} 
                 strokeWidth="1.5" 
                 strokeDasharray="4 2"
               />
@@ -646,7 +927,7 @@ export default function App() {
                 x={userX + (userX > width - 100 ? -8 : 8)} 
                 y={height - paddingBottom - 10} 
                 textAnchor={userX > width - 100 ? "end" : "start"} 
-                fill="#fff" 
+                fill={isLightMode ? "var(--text-primary)" : "#fff"} 
                 fontSize="0.8rem" 
                 fontWeight="700"
               >
@@ -674,29 +955,52 @@ export default function App() {
         )}
 
         {/* Legend */}
-        <div style={{ display: 'flex', gap: '1.5rem', justifyContent: 'center', marginTop: '1.2rem', padding: '0.5rem 0', flexWrap: 'wrap', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+        <div style={{ display: 'flex', gap: '1.5rem', justifyContent: 'center', marginTop: '1.2rem', padding: '0.5rem 0', flexWrap: 'wrap', borderTop: '1px solid var(--border-card)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
             <span style={{ display: 'inline-block', width: '12px', height: '12px', background: 'var(--primary)', borderRadius: '2px' }} />
-            <span style={{ color: '#fff', fontSize: '0.8rem', fontWeight: '500' }}>
+            <span style={{ color: 'var(--text-primary)', fontSize: '0.8rem', fontWeight: '500' }}>
               {predictionData.service_center}
             </span>
           </div>
           {comparePredictionData && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
               <span style={{ display: 'inline-block', width: '14px', height: '0px', borderTop: '2.5px dashed var(--secondary)' }} />
-              <span style={{ color: '#fff', fontSize: '0.8rem', fontWeight: '500' }}>
+              <span style={{ color: 'var(--text-primary)', fontSize: '0.8rem', fontWeight: '500' }}>
                 {comparePredictionData.service_center} (Comparison)
               </span>
             </div>
           )}
           {selectedCase && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <span style={{ display: 'inline-block', width: '8px', height: '8px', border: '1px solid #fff', borderRadius: '50%', background: 'var(--secondary)' }} />
-              <span style={{ color: '#fff', fontSize: '0.8rem', fontWeight: '500' }}>
+              <span style={{ display: 'inline-block', width: '8px', height: '8px', border: '1px solid var(--text-primary)', borderRadius: '50%', background: 'var(--secondary)' }} />
+              <span style={{ color: 'var(--text-primary)', fontSize: '0.8rem', fontWeight: '500' }}>
                 Your Progress ({userDays} days elapsed)
               </span>
             </div>
           )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderHeatmap = () => {
+    return (
+      <div style={{ padding: '1rem', background: 'var(--bg-card)', borderRadius: '12px' }}>
+        <h3 style={{ fontSize: '1rem', color: 'var(--text-primary)', marginBottom: '1rem', fontFamily: 'var(--font-heading)' }}>Historical Processing Time by Filing Month (Simulated)</h3>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '0.8rem' }}>
+          {MOCK_HEATMAP_DATA.map((data, i) => {
+            let bg = 'rgba(16, 185, 129, 0.15)';
+            let border = 'var(--status-approved)';
+            if (data.wait_days >= 220) { bg = 'rgba(239, 68, 68, 0.15)'; border = 'var(--status-denied)'; }
+            else if (data.wait_days >= 180) { bg = 'rgba(245, 158, 11, 0.15)'; border = 'var(--status-rfe)'; }
+            
+            return (
+              <div key={i} style={{ padding: '0.8rem', background: bg, borderBottom: `3px solid ${border}`, borderRadius: '6px', textAlign: 'center' }}>
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{data.month}</div>
+                <div style={{ fontWeight: '700', color: 'var(--text-primary)', marginTop: '0.3rem' }}>{data.wait_days}d</div>
+              </div>
+            )
+          })}
         </div>
       </div>
     );
@@ -711,8 +1015,17 @@ export default function App() {
           <p>Statistical processing forecasting powered by crowdsourced milestones</p>
         </div>
         
-        {/* Toggle Mode */}
+        {/* Header Actions */}
         <div style={{ display: 'flex', gap: '0.8rem', alignItems: 'center' }}>
+          <button
+            className="btn btn-secondary"
+            style={{ padding: '0.4rem', width: 'auto', borderRadius: '50%' }}
+            onClick={() => setIsLightMode(!isLightMode)}
+            title="Toggle Light/Dark Mode"
+          >
+            {isLightMode ? <Moon size={16} /> : <Sun size={16} />}
+          </button>
+          
           <button 
             className={`btn btn-secondary`} 
             style={{ 
@@ -741,92 +1054,175 @@ export default function App() {
           
           {/* Sync Case Form */}
           <div className="glass-card">
-            <h2 className="card-title">
-              <PlusCircle size={20} className="text-primary" />
-              Sync USCIS Sandbox Case
-            </h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', borderBottom: '1px solid var(--border-card)', paddingBottom: '0.8rem' }}>
+              <h2 className="card-title" style={{ marginBottom: 0 }}>
+                <PlusCircle size={20} className="text-primary" />
+                Case Integration
+              </h2>
+              <div className="tab-nav" style={{ margin: 0, padding: '0.2rem' }}>
+                <button 
+                  className={`tab-btn ${syncTab === 'sandbox' ? 'active' : ''}`}
+                  onClick={() => { setSyncTab('sandbox'); setSuccessMsg(''); setErrorMsg(''); }}
+                  style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
+                >
+                  Sandbox Sync
+                </button>
+                <button 
+                  className={`tab-btn ${syncTab === 'import' ? 'active' : ''}`}
+                  onClick={() => { setSyncTab('import'); setSuccessMsg(''); setErrorMsg(''); }}
+                  style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
+                >
+                  Import JSON
+                </button>
+              </div>
+            </div>
             
-            <form onSubmit={handleSyncCase}>
-              <div className="form-group">
-                <label>Visa Form Type</label>
-                <select 
-                  className="form-select" 
-                  value={formType} 
-                  onChange={(e) => setFormType(e.target.value)}
-                >
-                  <option value="I-485">I-485 (Adjustment of Status)</option>
-                  <option value="I-130">I-130 (Petition for Alien Relative)</option>
-                  <option value="I-765">I-765 (Employment Authorization)</option>
-                </select>
-              </div>
-
-              <div className="form-group">
-                <label>Receipt Number (Sandbox Test Key)</label>
-                <input 
-                  type="text" 
-                  className="form-input" 
-                  placeholder="e.g. MSC2690189472" 
-                  value={receiptNumber} 
-                  onChange={(e) => setReceiptNumber(e.target.value)} 
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Service Center</label>
-                <select 
-                  className="form-select" 
-                  value={serviceCenter} 
-                  onChange={(e) => setServiceCenter(e.target.value)}
-                >
-                  <option value="National Benefits Center">National Benefits Center</option>
-                  <option value="Texas Service Center">Texas Service Center</option>
-                  <option value="California Service Center">California Service Center</option>
-                  <option value="Nebraska Service Center">Nebraska Service Center</option>
-                </select>
-              </div>
-
-              <div className="form-group">
-                <label>Filing Receipt Date</label>
-                <input 
-                  type="date" 
-                  className="form-input" 
-                  value={filedDate} 
-                  onChange={(e) => setFiledDate(e.target.value)} 
-                />
-              </div>
-
-              {errorMsg && (
-                <div style={{ display: 'flex', gap: '0.4rem', color: 'var(--status-denied)', fontSize: '0.85rem', marginBottom: '1rem', alignItems: 'center' }}>
-                  <AlertCircle size={14} />
-                  <span>{errorMsg}</span>
+            {syncTab === 'sandbox' ? (
+              <form onSubmit={handleSyncCase}>
+                <div className="form-group">
+                  <label>Visa Form Type</label>
+                  <select 
+                    className="form-select" 
+                    value={formType} 
+                    onChange={(e) => setFormType(e.target.value)}
+                  >
+                    <option value="I-485">I-485 (Adjustment of Status)</option>
+                    <option value="I-130">I-130 (Petition for Alien Relative)</option>
+                    <option value="I-765">I-765 (Employment Authorization)</option>
+                  </select>
                 </div>
-              )}
 
-              {successMsg && (
-                <div style={{ display: 'flex', gap: '0.4rem', color: 'var(--status-approved)', fontSize: '0.85rem', marginBottom: '1rem', alignItems: 'center' }}>
-                  <CheckCircle2 size={14} />
-                  <span>{successMsg}</span>
+                <div className="form-group">
+                  <label>Receipt Number (Sandbox Test Key)</label>
+                  <input 
+                    type="text" 
+                    className="form-input" 
+                    placeholder="e.g. MSC2690189472" 
+                    value={receiptNumber} 
+                    onChange={(e) => setReceiptNumber(e.target.value)} 
+                  />
                 </div>
-              )}
 
-              <button 
-                type="submit" 
-                className="btn btn-primary" 
-                disabled={isSyncing}
-              >
-                {isSyncing ? (
-                  <>
-                    <RefreshCw size={16} className="spin" style={{ animation: 'spin 1.5s linear infinite' }} />
-                    Syncing Sandbox API...
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw size={16} />
-                    Sync Case Milestones
-                  </>
+                <div className="form-group">
+                  <label>Service Center</label>
+                  <select 
+                    className="form-select" 
+                    value={serviceCenter} 
+                    onChange={(e) => setServiceCenter(e.target.value)}
+                  >
+                    <option value="National Benefits Center">National Benefits Center</option>
+                    <option value="Texas Service Center">Texas Service Center</option>
+                    <option value="California Service Center">California Service Center</option>
+                    <option value="Nebraska Service Center">Nebraska Service Center</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label>Filing Receipt Date</label>
+                  <input 
+                    type="date" 
+                    className="form-input" 
+                    value={filedDate} 
+                    onChange={(e) => setFiledDate(e.target.value)} 
+                  />
+                </div>
+
+                {errorMsg && (
+                  <div style={{ display: 'flex', gap: '0.4rem', color: 'var(--status-denied)', fontSize: '0.85rem', marginBottom: '1rem', alignItems: 'center' }}>
+                    <AlertCircle size={14} />
+                    <span>{errorMsg}</span>
+                  </div>
                 )}
-              </button>
-            </form>
+
+                {successMsg && (
+                  <div style={{ display: 'flex', gap: '0.4rem', color: 'var(--status-approved)', fontSize: '0.85rem', marginBottom: '1rem', alignItems: 'center' }}>
+                    <CheckCircle2 size={14} />
+                    <span>{successMsg}</span>
+                  </div>
+                )}
+
+                <button 
+                  type="submit" 
+                  className="btn btn-primary" 
+                  disabled={isSyncing}
+                >
+                  {isSyncing ? (
+                    <>
+                      <RefreshCw size={16} className="spin" style={{ animation: 'spin 1.5s linear infinite' }} />
+                      Syncing Sandbox API...
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw size={16} />
+                      Sync Case Milestones
+                    </>
+                  )}
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleImportDetailedCase}>
+                <div className="form-group">
+                  <label>Service Center (Processing Location)</label>
+                  <select 
+                    className="form-select" 
+                    value={serviceCenter} 
+                    onChange={(e) => setServiceCenter(e.target.value)}
+                  >
+                    <option value="National Benefits Center">National Benefits Center</option>
+                    <option value="Texas Service Center">Texas Service Center</option>
+                    <option value="California Service Center">California Service Center</option>
+                    <option value="Nebraska Service Center">Nebraska Service Center</option>
+                  </select>
+                  <small style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginTop: '0.3rem', display: 'block' }}>
+                    my.uscis.gov JSON does not specify your processing office; please select it manually.
+                  </small>
+                </div>
+
+                <div className="form-group">
+                  <label>my.uscis.gov Raw Case JSON</label>
+                  <textarea 
+                    className="form-input" 
+                    rows="8"
+                    placeholder='Paste raw JSON starting with {"data": ...} or {"receiptNumber": ...}'
+                    style={{ fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical', width: '100%', boxSizing: 'border-box' }}
+                    value={rawJsonText} 
+                    onChange={(e) => setRawJsonText(e.target.value)} 
+                  />
+                </div>
+
+                {errorMsg && (
+                  <div style={{ display: 'flex', gap: '0.4rem', color: 'var(--status-denied)', fontSize: '0.85rem', marginBottom: '1rem', alignItems: 'center' }}>
+                    <AlertCircle size={14} />
+                    <span>{errorMsg}</span>
+                  </div>
+                )}
+
+                {successMsg && (
+                  <div style={{ display: 'flex', gap: '0.4rem', color: 'var(--status-approved)', fontSize: '0.85rem', marginBottom: '1rem', alignItems: 'center' }}>
+                    <CheckCircle2 size={14} />
+                    <span>{successMsg}</span>
+                  </div>
+                )}
+
+                <button 
+                  type="submit" 
+                  className="btn btn-primary" 
+                  disabled={isSyncing}
+                >
+                  {isSyncing ? (
+                    <>
+                      <RefreshCw size={16} className="spin" style={{ animation: 'spin 1.5s linear infinite' }} />
+                      Importing Case JSON...
+                    </>
+                  ) : (
+                    <>
+                      <PlusCircle size={16} />
+                      Import Detailed Case History
+                    </>
+                  )}
+                </button>
+              </form>
+            )}
           </div>
 
           {/* User Case List */}
@@ -878,11 +1274,34 @@ export default function App() {
                     </div>
                     <div className="case-item-detail">
                       <span>{c.service_center}</span>
-                      <span style={{ fontWeight: '600', color: '#fff' }}>{days} Days Elapsed</span>
+                      <span style={{ fontWeight: '600', color: 'var(--text-primary)' }}>{days} Days Elapsed</span>
                     </div>
                   </div>
                 );
               })}
+            </div>
+          </div>
+
+          {/* Live Similar Cases Feed */}
+          <div className="glass-card">
+            <h2 className="card-title">
+              <Bell size={20} style={{ color: 'var(--primary)' }} />
+              Live Activity Feed
+            </h2>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+              {feedItems.map((item, idx) => (
+                <div key={idx} style={{ 
+                  background: 'rgba(31, 41, 55, 0.2)', 
+                  border: '1px solid var(--border-card)', 
+                  borderRadius: '8px', 
+                  padding: '0.8rem',
+                  fontSize: '0.85rem',
+                  animation: idx === 0 ? 'pulse 2s' : 'none',
+                  borderLeft: idx === 0 ? '3px solid var(--status-approved)' : '1px solid var(--border-card)'
+                }}>
+                  {item}
+                </div>
+              ))}
             </div>
           </div>
 
@@ -915,6 +1334,13 @@ export default function App() {
                 >
                   Survival Curve
                 </button>
+                <button 
+                  className={`tab-btn ${activeTab === 'trends' ? 'active' : ''}`}
+                  onClick={() => setActiveTab('trends')}
+                  style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+                >
+                  Trends Heatmap
+                </button>
               </div>
             </div>
 
@@ -924,15 +1350,15 @@ export default function App() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-card)', paddingBottom: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
                   <div>
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Filing Category</span>
-                    <h3 style={{ color: '#fff', fontFamily: 'var(--font-heading)' }}>{selectedCase.form_type}</h3>
+                    <h3 style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-heading)' }}>{selectedCase.form_type}</h3>
                   </div>
                   <div>
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Filing Date</span>
-                    <h3 style={{ color: '#fff', fontFamily: 'var(--font-heading)' }}>{selectedCase.filed_date}</h3>
+                    <h3 style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-heading)' }}>{selectedCase.filed_date}</h3>
                   </div>
                   <div>
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Office Location</span>
-                    <h3 style={{ color: '#fff', fontFamily: 'var(--font-heading)' }}>{selectedCase.service_center}</h3>
+                    <h3 style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-heading)' }}>{selectedCase.service_center}</h3>
                   </div>
                   <div>
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Compare with Center</span>
@@ -983,47 +1409,61 @@ export default function App() {
                       {renderSurvivalChart()}
                     </div>
                   </div>
+                ) : activeTab === 'trends' ? (
+                  renderHeatmap()
                 ) : (
-                  
                   /* Sub-Panel: Detailed Milestones View */
                   <div>
-                    <h3 style={{ fontSize: '1rem', color: '#fff', marginBottom: '1rem', fontFamily: 'var(--font-heading)' }}>Verified Milestone History</h3>
-                    <div className="timeline">
-                      {selectedCase.milestones && selectedCase.milestones.map((m, idx) => (
-                        <div key={idx} className="timeline-item">
-                          <div className="timeline-dot active" />
-                          <div className="timeline-content">
-                            <div>
-                              <div className="timeline-title">{m.milestone_type.replace('_', ' ')}</div>
-                              <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '0.2rem' }}>
-                                Status: {idx === selectedCase.milestones.length - 1 ? selectedCase.current_status : 'Milestone completed.'}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                      <h3 style={{ fontSize: '1rem', color: 'var(--text-primary)', marginBottom: '0', fontFamily: 'var(--font-heading)' }}>Verified Milestone History</h3>
+                      <button 
+                        className="btn btn-secondary" 
+                        style={{ padding: '0.3rem 0.8rem', fontSize: '0.8rem', width: 'auto' }}
+                        onClick={handleShareTimeline}
+                      >
+                        <Share2 size={14} />
+                        Share Timeline
+                      </button>
+                    </div>
+                    
+                    <div id="timeline-capture-area" style={{ padding: '1rem', background: 'var(--bg-card)', borderRadius: '12px' }}>
+                      <div className="timeline">
+                        {selectedCase.milestones && selectedCase.milestones.map((m, idx) => (
+                          <div key={idx} className="timeline-item">
+                            <div className="timeline-dot active" />
+                            <div className="timeline-content">
+                              <div>
+                                <div className="timeline-title">{m.milestone_type.replace('_', ' ')}</div>
+                                <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '0.2rem' }}>
+                                  Status: {idx === selectedCase.milestones.length - 1 ? selectedCase.current_status : 'Milestone completed.'}
+                                </div>
                               </div>
+                              <span className="timeline-date">{m.event_date}</span>
                             </div>
-                            <span className="timeline-date">{m.event_date}</span>
                           </div>
-                        </div>
-                      ))}
+                        ))}
 
-                      {/* Pending Next Milestones estimation */}
-                      {!selectedCase.completed_date && (
-                        <div className="timeline-item" style={{ opacity: 0.5 }}>
-                          <div className="timeline-dot" style={{ backgroundColor: 'var(--status-rfe)' }} />
-                          <div className="timeline-content">
-                            <div>
-                              <div className="timeline-title" style={{ color: 'var(--status-rfe)' }}>Estimated Decision Date</div>
-                              <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '0.2rem' }}>
-                                Estimated completion based on Kaplan-Meier median average
+                        {/* Pending Next Milestones estimation */}
+                        {!selectedCase.completed_date && (
+                          <div className="timeline-item" style={{ opacity: 0.5 }}>
+                            <div className="timeline-dot" style={{ backgroundColor: 'var(--status-rfe)' }} />
+                            <div className="timeline-content">
+                              <div>
+                                <div className="timeline-title" style={{ color: 'var(--status-rfe)' }}>Estimated Decision Date</div>
+                                <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '0.2rem' }}>
+                                  Estimated completion based on Kaplan-Meier median average
+                                </div>
                               </div>
+                              <span className="timeline-date" style={{ color: 'var(--status-rfe)', fontWeight: '600' }}>
+                                {predictionData && predictionData.median_wait_days ? 
+                                  new Date(new Date(selectedCase.filed_date).getTime() + (predictionData.median_wait_days * 24 * 60 * 60 * 1000)).toISOString().split('T')[0]
+                                  : '--'
+                                }
+                              </span>
                             </div>
-                            <span className="timeline-date" style={{ color: 'var(--status-rfe)', fontWeight: '600' }}>
-                              {predictionData && predictionData.median_wait_days ? 
-                                new Date(new Date(selectedCase.filed_date).getTime() + (predictionData.median_wait_days * 24 * 60 * 60 * 1000)).toISOString().split('T')[0]
-                                : '--'
-                              }
-                            </span>
                           </div>
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}
