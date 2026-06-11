@@ -386,6 +386,148 @@ async def import_detailed_case(request: DetailedImportRequest):
         logger.error(f"Error importing detailed case: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
+@app.get("/api/cases/{receipt_number}/queue-insights")
+async def get_queue_insights(receipt_number: str):
+    """
+    Computes crowdsourced queue standings and milestone transit times for a case.
+    """
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database client not configured.")
+        
+    try:
+        receipt_num = receipt_number.strip().upper()
+        # 1. Fetch current case
+        case_res = supabase.table("cases").select("*, milestones(*)").eq("receipt_number", receipt_num).execute()
+        if not case_res.data:
+            raise HTTPException(status_code=404, detail="Case not found.")
+            
+        curr_case = case_res.data[0]
+        form_type = curr_case["form_type"]
+        service_center = curr_case["service_center"]
+        user_filed_date = parse_date(curr_case["filed_date"])
+        
+        if not user_filed_date:
+            raise HTTPException(status_code=400, detail="Invalid case filed date.")
+            
+        # 2. Fetch all cases in category with milestones to compute rankings & stats
+        all_res = supabase.table("cases")\
+            .select("id, filed_date, completed_date, current_status, milestones(milestone_type, event_date)")\
+            .eq("form_type", form_type)\
+            .eq("service_center", service_center)\
+            .execute()
+            
+        cases_data = all_res.data or []
+        
+        # 3. Compute stats
+        pending_ahead = 0
+        approved_behind = 0
+        
+        cohort_total = 0
+        cohort_approved = 0
+        
+        transit_biometrics = []
+        transit_rfe_sent = []
+        transit_rfe_resp = []
+        transit_total_decision = []
+        
+        for c in cases_data:
+            c_filed = parse_date(c["filed_date"])
+            c_completed = parse_date(c["completed_date"])
+            c_status_lower = (c["current_status"] or "").lower()
+            c_is_completed = (c_completed is not None) or ("approved" in c_status_lower) or ("denied" in c_status_lower)
+            
+            if not c_filed:
+                continue
+                
+            # Queue counts
+            if not c_is_completed:
+                if c_filed < user_filed_date:
+                    pending_ahead += 1
+            else:
+                if c_filed > user_filed_date:
+                    approved_behind += 1
+                    
+            # Cohort group (same month and year)
+            if c_filed.year == user_filed_date.year and c_filed.month == user_filed_date.month:
+                cohort_total += 1
+                if c_is_completed:
+                    cohort_approved += 1
+                    
+            # Milestones calculation
+            m_list = c.get("milestones") or []
+            m_dates = {}
+            for m in m_list:
+                m_type = m.get("milestone_type")
+                m_date = parse_date(m.get("event_date"))
+                if m_type and m_date:
+                    m_dates[m_type] = m_date
+                    
+            # Set filing date as start
+            start_date = c_filed
+            
+            # RECEIVED -> BIOMETRICS
+            if "BIOMETRICS" in m_dates:
+                days = (m_dates["BIOMETRICS"] - start_date).days
+                if days >= 0:
+                    transit_biometrics.append(days)
+                    
+            # RECEIVED -> RFE_SENT
+            if "RFE_SENT" in m_dates:
+                days = (m_dates["RFE_SENT"] - start_date).days
+                if days >= 0:
+                    transit_rfe_sent.append(days)
+                    
+            # RFE_SENT -> RFE_RESPONSE
+            if "RFE_SENT" in m_dates and "RFE_RESPONSE" in m_dates:
+                days = (m_dates["RFE_RESPONSE"] - m_dates["RFE_SENT"]).days
+                if days >= 0:
+                    transit_rfe_resp.append(days)
+                    
+            # RECEIVED -> DECISION (APPROVED or DENIED)
+            decision_date = c_completed or m_dates.get("APPROVED") or m_dates.get("DENIED")
+            if decision_date:
+                days = (decision_date - start_date).days
+                if days >= 0:
+                    transit_total_decision.append(days)
+                    
+        # Compute averages (or default to fallback stats if no historical records exist)
+        def avg(lst, default_val):
+            return int(round(sum(lst) / len(lst))) if lst else default_val
+            
+        avg_bio = avg(transit_biometrics, 40)
+        avg_rfe = avg(transit_rfe_sent, 120)
+        avg_resp = avg(transit_rfe_resp, 45)
+        avg_dec = avg(transit_total_decision, 210)
+        
+        cohort_approved_pct = round((cohort_approved / cohort_total) * 100, 1) if cohort_total > 0 else 0.0
+        
+        # User's milestones
+        user_m_list = curr_case.get("milestones") or []
+        user_m_types = [m.get("milestone_type") for m in user_m_list]
+        
+        return {
+            "receipt_number": receipt_num,
+            "form_type": form_type,
+            "service_center": service_center,
+            "queue_position": pending_ahead + 1,
+            "pending_ahead": pending_ahead,
+            "approved_behind": approved_behind,
+            "cohort_total": cohort_total,
+            "cohort_approved": cohort_approved,
+            "cohort_approved_pct": cohort_approved_pct,
+            "averages": {
+                "received_to_biometrics": avg_bio,
+                "received_to_rfe_sent": avg_rfe,
+                "rfe_sent_to_response": avg_resp,
+                "received_to_decision": avg_dec
+            },
+            "user_milestones": user_m_types
+        }
+        
+    except Exception as e:
+        logger.error(f"Error computing queue insights: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
 @app.post("/api/analytics/trigger")
 async def trigger_analytics(background_tasks: BackgroundTasks):
     """Triggers the batch calculation process as a background task."""
