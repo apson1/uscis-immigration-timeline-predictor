@@ -56,7 +56,9 @@ def run_survival_analysis() -> None:
 
     # 1. Fetch cases from Supabase
     try:
-        response = supabase.table("cases").select("id, form_type, service_center, filed_date, completed_date, current_status").execute()
+        response = supabase.table("cases").select(
+            "id, form_type, service_center, filed_date, completed_date, current_status, concurrent_filing, country_code, premium_processed"
+        ).execute()
         cases_data = response.data
     except Exception as e:
         logger.error(f"Error fetching cases from Supabase: {str(e)}")
@@ -85,7 +87,7 @@ def run_survival_analysis() -> None:
     for idx, row in df.iterrows():
         filed = row['filed_date']
         completed = row['completed_date']
-        status = row['current_status'].lower()
+        status = str(row['current_status']).lower()
         
         # A case is completed if completed_date is set, or status indicates terminal state
         is_completed = (completed is not None) or ("approved" in status) or ("denied" in status)
@@ -111,46 +113,48 @@ def run_survival_analysis() -> None:
     grouped = df.groupby(['form_type', 'service_center'])
 
     for (form_type, service_center), group in grouped:
-        # We need a minimum number of cases to compute a meaningful Kaplan-Meier estimator
+        # We need a minimum number of cases to compute a meaningful survival estimator
         if len(group) < 3:
             logger.info(f"Skipping {form_type} at {service_center} - insufficient cases ({len(group)}).")
             continue
 
         logger.info(f"Running survival curve for {form_type} at {service_center} with {len(group)} cases...")
 
-        T_group = group['T'].values
-        E_group = group['E'].values
+        # Build clean dataframe for Cox Proportional Hazards and Kaplan-Meier
+        fit_df = pd.DataFrame({
+            'T': group['T'].values,
+            'E': group['E'].values,
+            'concurrent_filing': group['concurrent_filing'].fillna(False).astype(int).values,
+            'premium_processed': group['premium_processed'].fillna(False).astype(int).values,
+            'is_backlogged_country': group['country_code'].fillna('ROW').apply(
+                lambda x: 1 if str(x).upper() in ('IN', 'CN', 'MX', 'PH') else 0
+            ).values
+        })
 
         try:
+            # Fit Kaplan-Meier (standard overall completion curve)
             kmf = KaplanMeierFitter()
-            kmf.fit(T_group, event_observed=E_group)
+            kmf.fit(fit_df['T'].values, event_observed=fit_df['E'].values)
             
             # Extract cumulative completion probability (1 - survival probability)
-            # S(t) is survival_function_, so 1 - S(t) is completion probability.
             survival_df = kmf.survival_function_
             days = survival_df.index.tolist()
             probabilities = (1.0 - survival_df['KM_estimate']).tolist()
             
-            # Format survival curve for JSON storage
-            # Reduce resolution to prevent oversized payloads: we can sample key intervals (every 10 days)
-            # or keep all points if the data is small. Let's sample to make it smooth.
+            # Sample to prevent oversized payloads
             curve_points = []
             max_days = int(max(days))
-            
-            # Interpolate or sample at fixed intervals (e.g., every 5 or 10 days up to max)
             interval = 5 if max_days < 100 else (10 if max_days < 500 else 30)
             sampled_days = list(range(0, max_days + 1, interval))
             if max_days not in sampled_days:
                 sampled_days.append(max_days)
                 
             for d in sampled_days:
-                # Find closest day in kmf timeline
                 idx = np.abs(np.array(days) - d).argmin()
                 prob = float(probabilities[idx])
                 curve_points.append({"days": d, "probability": round(prob, 4)})
 
             # Calculate wait time percentiles
-            # Median wait time is the point where completion probability >= 50%
             median_days = None
             p25_days = None
             p75_days = None
@@ -168,10 +172,50 @@ def run_survival_analysis() -> None:
                 if p90_days is None and p >= 0.90:
                     p90_days = d
 
-            # Fallback if the curve hasn't reached those percentiles (e.g., high censorship)
-            # We can use kmf.percentile or keep them as None if they haven't been observed yet.
             if median_days is None:
                 median_days = int(kmf.median_survival_time_) if not np.isinf(kmf.median_survival_time_) else None
+
+            # Now try Cox Proportional Hazards regression
+            from lifelines import CoxPHFitter
+            cox_coefficients = {
+                "concurrent_filing": 0.0,
+                "premium_processed": 0.0,
+                "is_backlogged_country": 0.0
+            }
+            baseline_curve_points = curve_points  # Fallback: baseline is same as general KM curve
+
+            try:
+                # Identify columns with variance (nunique > 1) to avoid collinearity/singular matrix errors
+                variates = ["concurrent_filing", "premium_processed", "is_backlogged_country"]
+                active_variates = [col for col in variates if fit_df[col].nunique() > 1]
+
+                if active_variates:
+                    # Fit CPH model with L2 regularization (penalizer=0.1) to prevent complete separation failures
+                    cph = CoxPHFitter(penalizer=0.1)
+                    cph.fit(fit_df[['T', 'E'] + active_variates], duration_col='T', event_col='E')
+                    
+                    # Extract coefficients
+                    params = cph.params_
+                    for col in active_variates:
+                        cox_coefficients[col] = float(params.get(col, 0.0))
+                    
+                    # Extract baseline survival curve S0(t)
+                    baseline_sf = cph.baseline_survival_
+                    b_days = baseline_sf.index.tolist()
+                    col_name = baseline_sf.columns[0]
+                    b_probabilities = (1.0 - baseline_sf[col_name]).tolist()
+                    
+                    baseline_curve_points = []
+                    for d in sampled_days:
+                        idx = np.abs(np.array(b_days) - d).argmin()
+                        prob = float(b_probabilities[idx])
+                        baseline_curve_points.append({"days": d, "probability": round(prob, 4)})
+                        
+                    logger.info(f"Successfully fit Cox Proportional Hazards for {form_type} at {service_center}. Coefficients: {cox_coefficients}")
+                else:
+                    logger.info(f"No active variates with variance for {form_type} at {service_center}. Skipping Cox fit.")
+            except Exception as cph_ex:
+                logger.warning(f"CoxPHFitter fit failed for {form_type} at {service_center} ({str(cph_ex)}). Falling back to Kaplan-Meier baseline.")
 
             # 3. Write / Update in predictions_summary
             record = {
@@ -182,11 +226,12 @@ def run_survival_analysis() -> None:
                 "p75_wait_days": p75_days,
                 "p90_wait_days": p90_days,
                 "survival_curve_json": curve_points,
+                "cox_coefficients": cox_coefficients,
+                "baseline_curve_json": baseline_curve_points,
                 "updated_at": datetime.now().isoformat()
             }
 
             # Upsert into predictions_summary
-            # We can do this using the Supabase upsert feature
             supabase.table("predictions_summary").upsert(
                 record, 
                 on_conflict="form_type,service_center"

@@ -43,6 +43,9 @@ class CaseSyncRequest(BaseModel):
     form_type: str        # User provides, or retrieved from API
     service_center: str   # User provides, or retrieved from API
     filed_date: str       # YYYY-MM-DD
+    concurrent_filing: Optional[bool] = False
+    premium_processed: Optional[bool] = False
+    country_code: Optional[str] = "ROW"
 
 @app.get("/")
 def read_root():
@@ -112,30 +115,36 @@ async def sync_case(request: CaseSyncRequest):
     uscis_data = await uscis.fetch_case_status(receipt_num)
     
     if "error" in uscis_data:
-        # If API lookup fails, we write it as a manual input or error out
-        logger.warning(f"USCIS API lookup failed for {receipt_num}: {uscis_data['error']}")
-        # For development ease, if client credentials are mock/missing, we'll allow testing
-        # with mock data by raising an error to prompt the user
-        raise HTTPException(
-            status_code=400, 
-            detail=f"USCIS Sandbox check failed: {uscis_data['error']}. Verify credentials or receipt number."
-        )
+        if uscis_data["error"] == "Case not found in Sandbox environment.":
+            logger.warning(f"Case {receipt_num} not found in Sandbox. Initializing local database record with 'Case Was Received'.")
+            status_text = "Case Was Received"
+            submitted_date = parse_date(request.filed_date)
+            modified_date = None
+            is_completed = False
+            completed_date = None
+        else:
+            # Genuine API connection/authentication or bad request errors (e.g. 401, 422) should still fail
+            logger.warning(f"USCIS API lookup failed for {receipt_num}: {uscis_data['error']}")
+            raise HTTPException(
+                status_code=400, 
+                detail=f"USCIS Sandbox check failed: {uscis_data['error']}. Verify credentials or receipt number."
+            )
+    else:
+        # Sandbox API returns values like: formType, submittedDate, modifiedDate, current_case_status_text_en
+        # nested within the "case_status" key. Ensure they map properly.
+        case_status_data = uscis_data.get("case_status", {})
+        form_type = case_status_data.get("formType", request.form_type)
+        status_text = case_status_data.get("current_case_status_text_en", "Case Was Received")
+        submitted_date_str = case_status_data.get("submittedDate", request.filed_date)
+        modified_date_str = case_status_data.get("modifiedDate")
 
-    # Sandbox API returns values like: formType, submittedDate, modifiedDate, current_case_status_text_en
-    # nested within the "case_status" key. Ensure they map properly.
-    case_status_data = uscis_data.get("case_status", {})
-    form_type = case_status_data.get("formType", request.form_type)
-    status_text = case_status_data.get("current_case_status_text_en", "Case Was Received")
-    submitted_date_str = case_status_data.get("submittedDate", request.filed_date)
-    modified_date_str = case_status_data.get("modifiedDate")
+        submitted_date = parse_date(submitted_date_str)
+        modified_date = parse_date(modified_date_str)
 
-    submitted_date = parse_date(submitted_date_str)
-    modified_date = parse_date(modified_date_str)
-
-    # Determine milestones and completion status
-    status_lower = status_text.lower()
-    is_completed = "approved" in status_lower or "denied" in status_lower
-    completed_date = modified_date if is_completed else None
+        # Determine milestones and completion status
+        status_lower = status_text.lower()
+        is_completed = "approved" in status_lower or "denied" in status_lower
+        completed_date = modified_date if is_completed else None
 
     # 2. Upsert Case to Supabase
     case_record = {
@@ -146,7 +155,10 @@ async def sync_case(request: CaseSyncRequest):
         "filed_date": str(submitted_date or request.filed_date),
         "current_status": status_text,
         "last_sync_date": "now()",
-        "completed_date": str(completed_date) if completed_date else None
+        "completed_date": str(completed_date) if completed_date else None,
+        "concurrent_filing": request.concurrent_filing,
+        "premium_processed": request.premium_processed,
+        "country_code": request.country_code or "ROW"
     }
 
     try:
@@ -225,6 +237,18 @@ async def import_detailed_case(request: DetailedImportRequest):
     payload = request.payload
     if "data" in payload:
         payload = payload["data"]
+        
+    # Extract covariates
+    premium_processed = payload.get("isPremiumProcessed") or payload.get("is_premium_processed") or payload.get("premiumProcessed") or False
+    
+    concurrent_cases = payload.get("concurrentCases")
+    concurrent_filing = False
+    if isinstance(concurrent_cases, list) and len(concurrent_cases) > 0:
+        concurrent_filing = True
+    elif payload.get("concurrent_filing") or payload.get("concurrentFiling"):
+        concurrent_filing = True
+        
+    country_code = payload.get("countryCode") or payload.get("country_code") or "ROW"
         
     # Heuristics to extract data from various USCIS JSON shapes
     receipt_num = payload.get("receiptNumber") or payload.get("receipt_number")
@@ -351,7 +375,10 @@ async def import_detailed_case(request: DetailedImportRequest):
         "filed_date": str(milestones_to_save["RECEIVED"]),
         "current_status": status_text,
         "last_sync_date": "now()",
-        "completed_date": str(completed_date) if completed_date else None
+        "completed_date": str(completed_date) if completed_date else None,
+        "concurrent_filing": concurrent_filing,
+        "premium_processed": premium_processed,
+        "country_code": country_code
     }
     
     try:
@@ -524,6 +551,8 @@ async def get_queue_insights(receipt_number: str):
             "user_milestones": user_m_types
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error computing queue insights: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")

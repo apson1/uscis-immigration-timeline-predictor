@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+/* eslint-disable react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
+import { useState, useEffect } from 'react';
 import { 
-  Calendar, 
   Clock, 
   Database, 
   RefreshCw, 
@@ -8,8 +8,6 @@ import {
   CheckCircle2, 
   AlertCircle, 
   Layers, 
-  HelpCircle, 
-  ChevronRight, 
   Activity, 
   TrendingUp, 
   ShieldAlert,
@@ -34,6 +32,9 @@ const MOCK_CASES = [
     current_status: 'Case Was Approved',
     completed_date: '2026-05-10',
     last_sync_date: '2026-06-03T12:00:00Z',
+    concurrent_filing: true,
+    premium_processed: false,
+    country_code: 'IN',
     milestones: [
       { milestone_type: 'RECEIVED', event_date: '2025-10-15' },
       { milestone_type: 'BIOMETRICS', event_date: '2025-11-20' },
@@ -51,6 +52,9 @@ const MOCK_CASES = [
     current_status: 'Biometrics Appointment Scheduled',
     completed_date: null,
     last_sync_date: '2026-06-03T12:00:00Z',
+    concurrent_filing: false,
+    premium_processed: true,
+    country_code: 'ROW',
     milestones: [
       { milestone_type: 'RECEIVED', event_date: '2026-03-10' },
       { milestone_type: 'BIOMETRICS', event_date: '2026-04-12' }
@@ -65,6 +69,9 @@ const MOCK_CASES = [
     current_status: 'Request for Additional Evidence Sent',
     completed_date: null,
     last_sync_date: '2026-06-03T12:00:00Z',
+    concurrent_filing: false,
+    premium_processed: false,
+    country_code: 'MX',
     milestones: [
       { milestone_type: 'RECEIVED', event_date: '2025-08-01' },
       { milestone_type: 'RFE_SENT', event_date: '2026-01-20' }
@@ -81,6 +88,27 @@ const MOCK_PREDICTIONS = {
       p25_wait_days: 135,
       p75_wait_days: 285,
       p90_wait_days: 350,
+      cox_coefficients: {
+        concurrent_filing: -0.15,
+        premium_processed: 0.0,
+        is_backlogged_country: -0.35
+      },
+      baseline_curve_json: [
+        { days: 0, probability: 0.0 },
+        { days: 30, probability: 0.02 },
+        { days: 60, probability: 0.08 },
+        { days: 90, probability: 0.15 },
+        { days: 120, probability: 0.22 },
+        { days: 150, probability: 0.32 },
+        { days: 180, probability: 0.44 },
+        { days: 210, probability: 0.52 },
+        { days: 240, probability: 0.65 },
+        { days: 270, probability: 0.73 },
+        { days: 300, probability: 0.81 },
+        { days: 330, probability: 0.88 },
+        { days: 360, probability: 0.93 },
+        { days: 400, probability: 0.98 }
+      ],
       survival_curve_json: [
         { days: 0, probability: 0.0 },
         { days: 30, probability: 0.02 },
@@ -107,6 +135,23 @@ const MOCK_PREDICTIONS = {
       p25_wait_days: 41,
       p75_wait_days: 85,
       p90_wait_days: 110,
+      cox_coefficients: {
+        concurrent_filing: 0.1,
+        premium_processed: 1.8,
+        is_backlogged_country: -0.2
+      },
+      baseline_curve_json: [
+        { days: 0, probability: 0.0 },
+        { days: 15, probability: 0.05 },
+        { days: 30, probability: 0.18 },
+        { days: 45, probability: 0.32 },
+        { days: 60, probability: 0.48 },
+        { days: 75, probability: 0.68 },
+        { days: 90, probability: 0.82 },
+        { days: 105, probability: 0.91 },
+        { days: 120, probability: 0.97 },
+        { days: 150, probability: 0.99 }
+      ],
       survival_curve_json: [
         { days: 0, probability: 0.0 },
         { days: 15, probability: 0.05 },
@@ -129,6 +174,24 @@ const MOCK_PREDICTIONS = {
       p25_wait_days: 220,
       p75_wait_days: 410,
       p90_wait_days: 520,
+      cox_coefficients: {
+        concurrent_filing: 0.05,
+        premium_processed: 0.8,
+        is_backlogged_country: -0.45
+      },
+      baseline_curve_json: [
+        { days: 0, probability: 0.0 },
+        { days: 60, probability: 0.01 },
+        { days: 120, probability: 0.05 },
+        { days: 180, probability: 0.12 },
+        { days: 240, probability: 0.30 },
+        { days: 300, probability: 0.46 },
+        { days: 360, probability: 0.62 },
+        { days: 420, probability: 0.78 },
+        { days: 480, probability: 0.86 },
+        { days: 540, probability: 0.92 },
+        { days: 600, probability: 0.97 }
+      ],
       survival_curve_json: [
         { days: 0, probability: 0.0 },
         { days: 60, probability: 0.01 },
@@ -160,6 +223,43 @@ const MOCK_HEATMAP_DATA = [
   { month: "Nov 2025", wait_days: 230 },
   { month: "Dec 2025", wait_days: 250 }
 ];
+
+const getAdjustedCurve = (predData, caseObj) => {
+  if (!predData || !predData.baseline_curve_json) return null;
+  if (!caseObj) return predData.survival_curve_json;
+  
+  const baseline = predData.baseline_curve_json;
+  const coefs = predData.cox_coefficients || {};
+  
+  // Covariates Z
+  const z_concurrent = caseObj.concurrent_filing ? 1 : 0;
+  const z_premium = caseObj.premium_processed ? 1 : 0;
+  const isBacklog = ['IN', 'CN', 'MX', 'PH'].includes(String(caseObj.country_code).toUpperCase());
+  const z_backlog = isBacklog ? 1 : 0;
+  
+  // Coefficients beta
+  const beta_concurrent = coefs.concurrent_filing || 0.0;
+  const beta_premium = coefs.premium_processed || 0.0;
+  const beta_backlog = coefs.is_backlogged_country || 0.0;
+  
+  const beta_sum = (beta_concurrent * z_concurrent) + (beta_premium * z_premium) + (beta_backlog * z_backlog);
+  const exp_beta = Math.exp(beta_sum);
+  
+  return baseline.map(pt => {
+    const S0 = Math.max(0, Math.min(1, 1.0 - pt.probability));
+    const adjusted_p = 1.0 - Math.pow(S0, exp_beta);
+    return {
+      days: pt.days,
+      probability: Math.max(0, Math.min(1, adjusted_p))
+    };
+  });
+};
+
+const getPercentileDays = (curve, pct) => {
+  if (!curve || curve.length === 0) return null;
+  const pt = curve.find(p => p.probability >= pct);
+  return pt ? pt.days : null;
+};
 
 export default function App() {
   const [isDemoMode, setIsDemoMode] = useState(true);
@@ -235,6 +335,9 @@ export default function App() {
   const [receiptNumber, setReceiptNumber] = useState('');
   const [serviceCenter, setServiceCenter] = useState('National Benefits Center');
   const [filedDate, setFiledDate] = useState('');
+  const [concurrentFiling, setConcurrentFiling] = useState(false);
+  const [premiumProcessed, setPremiumProcessed] = useState(false);
+  const [countryCode, setCountryCode] = useState('ROW');
   const [syncTab, setSyncTab] = useState('sandbox'); // 'sandbox' or 'import'
   const [rawJsonText, setRawJsonText] = useState('');
   
@@ -504,6 +607,9 @@ export default function App() {
           current_status: 'Case Was Received',
           completed_date: null,
           last_sync_date: new Date().toISOString(),
+          concurrent_filing: concurrentFiling,
+          premium_processed: premiumProcessed,
+          country_code: countryCode,
           milestones: [
             { milestone_type: 'RECEIVED', event_date: finalFiledDate }
           ]
@@ -512,6 +618,9 @@ export default function App() {
         setCases([newCase, ...cases]);
         setSelectedCaseId(newId);
         setReceiptNumber('');
+        setConcurrentFiling(false);
+        setPremiumProcessed(false);
+        setCountryCode('ROW');
         setSuccessMsg(`Successfully synced mock Sandbox receipt ${newCase.receipt_number}!`);
         notifyUser('USCIS Update', `Mock case ${newCase.receipt_number} synced. Status: ${newCase.current_status}`);
         setIsSyncing(false);
@@ -529,7 +638,10 @@ export default function App() {
             user_id: 'dev_user_1', // Single-user profile sandbox mode
             form_type: formType,
             service_center: serviceCenter,
-            filed_date: finalFiledDate
+            filed_date: finalFiledDate,
+            concurrent_filing: concurrentFiling,
+            premium_processed: premiumProcessed,
+            country_code: countryCode
           })
         });
 
@@ -549,6 +661,9 @@ export default function App() {
         setSelectedCaseId(fetchedCase.id);
         
         setReceiptNumber('');
+        setConcurrentFiling(false);
+        setPremiumProcessed(false);
+        setCountryCode('ROW');
         setSuccessMsg(`Successfully connected to USCIS Sandbox. Sync complete!`);
         notifyUser('USCIS Update', `Case ${fetchedCase.receipt_number} synced. Status: ${fetchedCase.current_status}`);
         
@@ -573,7 +688,7 @@ export default function App() {
     let parsedPayload;
     try {
       parsedPayload = JSON.parse(rawJsonText.trim());
-    } catch (err) {
+    } catch {
       setErrorMsg('Invalid JSON format. Please paste a valid JSON document.');
       return;
     }
@@ -855,8 +970,10 @@ export default function App() {
       );
     }
 
-    const points = predictionData.survival_curve_json;
-    const comparePoints = comparePredictionData?.survival_curve_json || [];
+    const points = getAdjustedCurve(predictionData, selectedCase) || predictionData.survival_curve_json;
+    const comparePoints = getAdjustedCurve(comparePredictionData, selectedCase) || comparePredictionData?.survival_curve_json || [];
+    const baselinePoints = predictionData.baseline_curve_json || predictionData.survival_curve_json;
+    const adjustedMedian = getPercentileDays(points, 0.50) || predictionData.median_wait_days;
 
     const maxDaysMain = points.length > 0 ? points[points.length - 1].days : 0;
     const maxDaysCompare = comparePoints.length > 0 ? comparePoints[comparePoints.length - 1].days : 0;
@@ -876,6 +993,15 @@ export default function App() {
     const getX = (d) => paddingLeft + (d / maxDays) * chartWidth;
     // Helper: Map probability (0.0 to 1.0) to Y coordinate
     const getY = (p) => paddingTop + chartHeight - p * chartHeight;
+
+    // Build SVG Path string for Baseline Curve
+    let baselinePathD = '';
+    if (predictionData.baseline_curve_json && predictionData.baseline_curve_json.length > 0) {
+      baselinePathD = `M ${getX(baselinePoints[0].days)} ${getY(baselinePoints[0].probability)}`;
+      baselinePoints.forEach(pt => {
+        baselinePathD += ` L ${getX(pt.days)} ${getY(pt.probability)}`;
+      });
+    }
 
     // Build SVG Path string for Main Curve
     let pathD = `M ${getX(points[0].days)} ${getY(points[0].probability)}`;
@@ -955,6 +1081,18 @@ export default function App() {
           {/* X Axis line */}
           <line x1={paddingLeft} y1={height - paddingBottom} x2={width - paddingRight} y2={height - paddingBottom} className="chart-axis-line" />
 
+          {/* Baseline Curve Line (dashed) */}
+          {baselinePathD && (
+            <path 
+              d={baselinePathD} 
+              fill="none" 
+              stroke="var(--text-muted)" 
+              strokeWidth="1.5" 
+              strokeDasharray="3 3"
+              opacity="0.6"
+            />
+          )}
+
           {/* Area & Main Curve Line */}
           <path d={areaD} className="chart-area" />
           <path d={pathD} className="chart-line" />
@@ -972,12 +1110,12 @@ export default function App() {
           )}
 
           {/* Median Wait Line indicator (Main Curve) */}
-          {predictionData.median_wait_days && (
+          {adjustedMedian && (
             <g>
               <line 
-                x1={getX(predictionData.median_wait_days)} 
+                x1={getX(adjustedMedian)} 
                 y1={paddingTop} 
-                x2={getX(predictionData.median_wait_days)} 
+                x2={getX(adjustedMedian)} 
                 y2={height - paddingBottom} 
                 stroke="var(--primary)"
                 strokeWidth="1.5"
@@ -985,13 +1123,13 @@ export default function App() {
                 opacity="0.75"
               />
               <text 
-                x={getX(predictionData.median_wait_days) + 5} 
+                x={getX(adjustedMedian) + 5} 
                 y={paddingTop + 15} 
                 fill="var(--primary)" 
                 fontSize="0.75rem"
                 fontWeight="600"
               >
-                Median: {predictionData.median_wait_days}d
+                Median: {adjustedMedian}d
               </text>
             </g>
           )}
@@ -1039,7 +1177,7 @@ export default function App() {
                 cy={userProbY} 
                 r="6" 
                 className="chart-marker"
-                onMouseEnter={(e) => {
+                onMouseEnter={() => {
                   setChartTooltip({
                     x: userX,
                     y: userProbY - 35,
@@ -1085,9 +1223,17 @@ export default function App() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
             <span style={{ display: 'inline-block', width: '12px', height: '12px', background: 'var(--primary)', borderRadius: '2px' }} />
             <span style={{ color: 'var(--text-primary)', fontSize: '0.8rem', fontWeight: '500' }}>
-              {predictionData.service_center}
+              {predictionData.service_center} (Adjusted)
             </span>
           </div>
+          {predictionData.baseline_curve_json && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <span style={{ display: 'inline-block', width: '14px', height: '0px', borderTop: '1.5px dashed var(--text-muted)' }} />
+              <span style={{ color: 'var(--text-primary)', fontSize: '0.8rem', fontWeight: '500' }}>
+                {predictionData.service_center} (Baseline)
+              </span>
+            </div>
+          )}
           {comparePredictionData && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
               <span style={{ display: 'inline-block', width: '14px', height: '0px', borderTop: '2.5px dashed var(--secondary)' }} />
@@ -1398,6 +1544,43 @@ export default function App() {
                   />
                 </div>
 
+                <div className="form-group">
+                  <label>Country of Birth (Chargeability)</label>
+                  <select 
+                    className="form-select" 
+                    value={countryCode} 
+                    onChange={(e) => setCountryCode(e.target.value)}
+                  >
+                    <option value="ROW">Rest of World (ROW)</option>
+                    <option value="IN">India (IN)</option>
+                    <option value="CN">China (CN)</option>
+                    <option value="MX">Mexico (MX)</option>
+                    <option value="PH">Philippines (PH)</option>
+                  </select>
+                </div>
+
+                <div style={{ display: 'flex', gap: '1.5rem', marginBottom: '1.2rem', marginTop: '0.5rem' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-primary)' }}>
+                    <input 
+                      type="checkbox" 
+                      checked={concurrentFiling} 
+                      onChange={(e) => setConcurrentFiling(e.target.checked)} 
+                      style={{ width: '16px', height: '16px', accentColor: 'var(--primary)' }}
+                    />
+                    Concurrent Filing
+                  </label>
+
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-primary)' }}>
+                    <input 
+                      type="checkbox" 
+                      checked={premiumProcessed} 
+                      onChange={(e) => setPremiumProcessed(e.target.checked)} 
+                      style={{ width: '16px', height: '16px', accentColor: 'var(--primary)' }}
+                    />
+                    Premium Processing
+                  </label>
+                </div>
+
                 {errorMsg && (
                   <div style={{ display: 'flex', gap: '0.4rem', color: 'var(--status-denied)', fontSize: '0.85rem', marginBottom: '1rem', alignItems: 'center' }}>
                     <AlertCircle size={14} />
@@ -1545,7 +1728,12 @@ export default function App() {
                     </div>
                     <div className="case-item-detail">
                       <span>{c.service_center}</span>
-                      <span style={{ fontWeight: '600', color: 'var(--text-primary)' }}>{days} Days Elapsed</span>
+                      <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'center' }}>
+                        {c.premium_processed && <span style={{ fontSize: '0.7rem', padding: '0.1rem 0.3rem', borderRadius: '3px', background: 'rgba(168, 85, 247, 0.15)', color: 'var(--secondary)', border: '1px solid rgba(168, 85, 247, 0.3)' }}>Premium</span>}
+                        {c.concurrent_filing && <span style={{ fontSize: '0.7rem', padding: '0.1rem 0.3rem', borderRadius: '3px', background: 'rgba(59, 130, 246, 0.15)', color: 'var(--primary)', border: '1px solid rgba(59, 130, 246, 0.3)' }}>Concurrent</span>}
+                        {c.country_code && c.country_code !== 'ROW' && <span style={{ fontSize: '0.7rem', padding: '0.1rem 0.3rem', borderRadius: '3px', background: 'rgba(245, 158, 11, 0.15)', color: 'var(--accent)', border: '1px solid rgba(245, 158, 11, 0.3)' }}>{c.country_code}</span>}
+                        <span style={{ fontWeight: '600', color: 'var(--text-primary)' }}>{days} Days Elapsed</span>
+                      </div>
                     </div>
                   </div>
                 );
@@ -1657,27 +1845,57 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Selected Case Covariates Status Card */}
+                <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', padding: '0.6rem 1rem', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)', marginBottom: '1.5rem', fontSize: '0.85rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Country of Birth:</span>
+                    <strong style={{ color: 'var(--text-primary)' }}>{selectedCase.country_code || 'ROW'}</strong>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', marginLeft: '1rem' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Concurrent Filing:</span>
+                    <strong style={{ color: selectedCase.concurrent_filing ? 'var(--status-approved)' : 'var(--text-muted)' }}>
+                      {selectedCase.concurrent_filing ? 'Yes' : 'No'}
+                    </strong>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', marginLeft: '1rem' }}>
+                    <span style={{ color: 'var(--text-muted)' }}>Premium Processing:</span>
+                    <strong style={{ color: selectedCase.premium_processed ? 'var(--status-approved)' : 'var(--text-muted)' }}>
+                      {selectedCase.premium_processed ? 'Yes' : 'No'}
+                    </strong>
+                  </div>
+                </div>
+
                 {/* Sub-Panel: Survival Curve View */}
                 {activeTab === 'predictions' ? (
                   <div>
-                    <div className="stats-grid">
-                      <div className="stat-tile">
-                        <div className="stat-value">{predictionData ? `${predictionData.median_wait_days}d` : '--'}</div>
-                        <div className="stat-label">Median Wait (50%)</div>
-                      </div>
-                      <div className="stat-tile">
-                        <div className="stat-value">{predictionData ? `${predictionData.p25_wait_days}d` : '--'}</div>
-                        <div className="stat-label">Fast Track (25%)</div>
-                      </div>
-                      <div className="stat-tile">
-                        <div className="stat-value">{predictionData ? `${predictionData.p75_wait_days}d` : '--'}</div>
-                        <div className="stat-label">Moderate Delay (75%)</div>
-                      </div>
-                      <div className="stat-tile">
-                        <div className="stat-value">{predictionData ? `${predictionData.p90_wait_days}d` : '--'}</div>
-                        <div className="stat-label">Severe Delay (90%)</div>
-                      </div>
-                    </div>
+                    {(() => {
+                      const mainCurve = getAdjustedCurve(predictionData, selectedCase) || (predictionData?.survival_curve_json || []);
+                      const adjustedMedian = getPercentileDays(mainCurve, 0.50) || predictionData?.median_wait_days;
+                      const adjustedP25 = getPercentileDays(mainCurve, 0.25) || predictionData?.p25_wait_days;
+                      const adjustedP75 = getPercentileDays(mainCurve, 0.75) || predictionData?.p75_wait_days;
+                      const adjustedP90 = getPercentileDays(mainCurve, 0.90) || predictionData?.p90_wait_days;
+                      
+                      return (
+                        <div className="stats-grid">
+                          <div className="stat-tile">
+                            <div className="stat-value">{adjustedMedian ? `${adjustedMedian}d` : '--'}</div>
+                            <div className="stat-label">Median Wait (50%)</div>
+                          </div>
+                          <div className="stat-tile">
+                            <div className="stat-value">{adjustedP25 ? `${adjustedP25}d` : '--'}</div>
+                            <div className="stat-label">Fast Track (25%)</div>
+                          </div>
+                          <div className="stat-tile">
+                            <div className="stat-value">{adjustedP75 ? `${adjustedP75}d` : '--'}</div>
+                            <div className="stat-label">Moderate Delay (75%)</div>
+                          </div>
+                          <div className="stat-tile">
+                            <div className="stat-value">{adjustedP90 ? `${adjustedP90}d` : '--'}</div>
+                            <div className="stat-label">Severe Delay (90%)</div>
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     <div style={{ padding: '0.5rem', background: 'rgba(255,255,255,0.01)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.03)' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0 0.5rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>

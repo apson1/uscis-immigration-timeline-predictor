@@ -10,7 +10,10 @@ CREATE TABLE IF NOT EXISTS cases (
     filed_date DATE NOT NULL,
     current_status VARCHAR(255) NOT NULL,
     last_sync_date TIMESTAMP DEFAULT NOW(),
-    completed_date DATE -- Populated when status transitions to approved/denied
+    completed_date DATE, -- Populated when status transitions to approved/denied
+    concurrent_filing BOOLEAN DEFAULT FALSE,
+    country_code VARCHAR(10) DEFAULT 'ROW',
+    premium_processed BOOLEAN DEFAULT FALSE
 );
 
 -- Index for quick lookup on receipt numbers and categorization
@@ -41,8 +44,11 @@ CREATE TABLE IF NOT EXISTS predictions_summary (
     p75_wait_days INTEGER,
     p90_wait_days INTEGER,
     survival_curve_json JSONB NOT NULL, -- Array of {days: X, probability: Y}
+    cox_coefficients JSONB,             -- JSON object mapping covariates to their Cox hazard ratio weights
+    baseline_curve_json JSONB,          -- Baseline survival curve S0(t) as an array of {days: X, probability: Y}
     updated_at TIMESTAMP DEFAULT NOW(),
     UNIQUE(form_type, service_center)
 );
 
 CREATE INDEX IF NOT EXISTS idx_predictions_lookup ON predictions_summary(form_type, service_center);
+
