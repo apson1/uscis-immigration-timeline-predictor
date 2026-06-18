@@ -1,6 +1,8 @@
 import os
 import logging
 from typing import Optional, List
+from datetime import date, datetime
+import pandas as pd
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -562,6 +564,146 @@ async def trigger_analytics(background_tasks: BackgroundTasks):
     """Triggers the batch calculation process as a background task."""
     background_tasks.add_task(run_survival_analysis)
     return {"message": "Batch survival analysis triggered in the background."}
+
+@app.get("/api/analytics/global")
+async def get_global_analytics():
+    """
+    Computes global analytics across all cases:
+    1. Nationality statistics (approvals, pending, wait times)
+    2. Monthly approval processing trends
+    3. Service center processing comparisons
+    """
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database client not configured.")
+        
+    try:
+        # Fetch all cases
+        response = supabase.table("cases").select(
+            "form_type, service_center, filed_date, completed_date, current_status, country_code"
+        ).execute()
+        
+        cases_data = response.data or []
+        if not cases_data:
+            return {
+                "nationalities": [],
+                "monthly_trends": [],
+                "service_centers": []
+            }
+            
+        df = pd.DataFrame(cases_data)
+        df['filed_date'] = df['filed_date'].apply(parse_date)
+        df['completed_date'] = df['completed_date'].apply(parse_date)
+        df = df.dropna(subset=['filed_date'])
+        
+        if df.empty:
+            return {
+                "nationalities": [],
+                "monthly_trends": [],
+                "service_centers": []
+            }
+            
+        today = date.today()
+        # Compute wait days
+        df['is_approved'] = df['completed_date'].notna() | df['current_status'].str.lower().str.contains("approved|delivered|mailed", na=False)
+        
+        def calc_days(row):
+            filed = row['filed_date']
+            completed = row['completed_date']
+            if row['is_approved']:
+                end_date = completed if completed else today
+                return max((end_date - filed).days, 1)
+            else:
+                return max((today - filed).days, 1)
+                
+        df['wait_days'] = df.apply(calc_days, axis=1)
+        
+        # 1. Nationality Stats
+        nationalities_list = []
+        nat_groups = df.groupby('country_code')
+        for country, group in nat_groups:
+            approved_count = int(group['is_approved'].sum())
+            pending_count = int((~group['is_approved']).sum())
+            approved_group = group[group['is_approved']]
+            avg_wait = float(approved_group['wait_days'].mean()) if not approved_group.empty else 0.0
+            
+            nationalities_list.append({
+                "country_code": str(country).upper(),
+                "approved_count": approved_count,
+                "pending_count": pending_count,
+                "avg_wait_days": round(avg_wait, 1)
+            })
+            
+        # 2. Monthly Trends (grouped by month of completion, form_type)
+        monthly_list = []
+        approved_df = df[df['is_approved']].copy()
+        if not approved_df.empty:
+            # Ensure completed_date falls back to filed_date + wait_days if null
+            approved_df['completion_date_filled'] = approved_df.apply(
+                lambda r: r['completed_date'] if r['completed_date'] else r['filed_date'] + pd.Timedelta(days=r['wait_days']),
+                axis=1
+            )
+            approved_df['completion_month'] = approved_df['completion_date_filled'].apply(lambda x: x.strftime('%Y-%m') if x else None)
+            approved_df = approved_df.dropna(subset=['completion_month'])
+            
+            if not approved_df.empty:
+                month_form_groups = approved_df.groupby(['completion_month', 'form_type'])
+                for (month, form), group in month_form_groups:
+                    median_wait = float(group['wait_days'].quantile(0.5))
+                    p90_wait = float(group['wait_days'].quantile(0.9))
+                    avg_wait = float(group['wait_days'].mean())
+                    monthly_list.append({
+                        "month": month,
+                        "form_type": form,
+                        "count": int(len(group)),
+                        "avg_wait_days": round(avg_wait, 1),
+                        "median_wait_days": round(median_wait, 1),
+                        "p90_wait_days": round(p90_wait, 1)
+                    })
+                # Sort chronologically
+                monthly_list.sort(key=lambda x: (x['month'], x['form_type']))
+            
+        # 3. Service Center Stats
+        sc_list = []
+        sc_groups = df.groupby(['service_center', 'form_type'])
+        for (sc, form), group in sc_groups:
+            approved_count = int(group['is_approved'].sum())
+            pending_count = int((~group['is_approved']).sum())
+            approved_group = group[group['is_approved']]
+            avg_wait = float(approved_group['wait_days'].mean()) if not approved_group.empty else 0.0
+            
+            sc_list.append({
+                "service_center": sc,
+                "form_type": form,
+                "approved_count": approved_count,
+                "pending_count": pending_count,
+                "avg_wait_days": round(avg_wait, 1)
+            })
+
+        # 4. Day of Week Approval Distribution
+        weekday_list = []
+        if not approved_df.empty:
+            approved_df['weekday'] = approved_df['completion_date_filled'].apply(lambda x: x.strftime('%A'))
+            day_counts = approved_df.groupby('weekday').size()
+            days_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            total_approvals = int(len(approved_df))
+            for day in days_order:
+                count = int(day_counts.get(day, 0))
+                pct = round((count / total_approvals) * 100, 1) if total_approvals > 0 else 0.0
+                weekday_list.append({
+                    "day": day,
+                    "count": count,
+                    "percentage": pct
+                })
+            
+        return {
+            "nationalities": nationalities_list,
+            "monthly_trends": monthly_list,
+            "service_centers": sc_list,
+            "weekday_distribution": weekday_list
+        }
+    except Exception as e:
+        logger.error(f"Error computing global stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

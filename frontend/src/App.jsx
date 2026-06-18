@@ -14,9 +14,11 @@ import {
   Moon,
   Sun,
   Share2,
-  Bell
+  Bell,
+  Search
 } from 'lucide-react';
 import html2canvas from 'html2canvas';
+import { COUNTRY_MAP as COUNTRY_METADATA } from './countries';
 
 // Setup environment URLs (FastAPI backend)
 const BACKEND_URL = 'http://127.0.0.1:8000';
@@ -224,6 +226,60 @@ const MOCK_HEATMAP_DATA = [
   { month: "Dec 2025", wait_days: 250 }
 ];
 
+const MOCK_GLOBAL_DATA = {
+  nationalities: [
+    { country_code: 'IN', approved_count: 85, pending_count: 120, avg_wait_days: 280.5 },
+    { country_code: 'CN', approved_count: 55, pending_count: 75, avg_wait_days: 250.2 },
+    { country_code: 'MX', approved_count: 42, pending_count: 35, avg_wait_days: 210.8 },
+    { country_code: 'PH', approved_count: 30, pending_count: 40, avg_wait_days: 230.1 },
+    { country_code: 'ROW', approved_count: 188, pending_count: 165, avg_wait_days: 175.4 }
+  ],
+  monthly_trends: [
+    // I-485
+    { month: '2025-10', form_type: 'I-485', count: 12, avg_wait_days: 195.0, median_wait_days: 190.0, p90_wait_days: 240.0 },
+    { month: '2025-11', form_type: 'I-485', count: 18, avg_wait_days: 202.4, median_wait_days: 195.0, p90_wait_days: 245.0 },
+    { month: '2025-12', form_type: 'I-485', count: 15, avg_wait_days: 215.1, median_wait_days: 210.0, p90_wait_days: 260.0 },
+    { month: '2026-01', form_type: 'I-485', count: 24, avg_wait_days: 208.5, median_wait_days: 202.0, p90_wait_days: 250.0 },
+    { month: '2026-02', form_type: 'I-485', count: 20, avg_wait_days: 220.0, median_wait_days: 215.0, p90_wait_days: 270.0 },
+    { month: '2026-03', form_type: 'I-485', count: 32, avg_wait_days: 198.8, median_wait_days: 192.0, p90_wait_days: 235.0 },
+    { month: '2026-04', form_type: 'I-485', count: 28, avg_wait_days: 190.2, median_wait_days: 185.0, p90_wait_days: 225.0 },
+    { month: '2026-05', form_type: 'I-485', count: 45, avg_wait_days: 185.5, median_wait_days: 180.0, p90_wait_days: 220.0 },
+    // I-765
+    { month: '2025-10', form_type: 'I-765', count: 8, avg_wait_days: 72.0, median_wait_days: 70.0, p90_wait_days: 90.0 },
+    { month: '2025-11', form_type: 'I-765', count: 14, avg_wait_days: 68.5, median_wait_days: 65.0, p90_wait_days: 85.0 },
+    { month: '2025-12', form_type: 'I-765', count: 12, avg_wait_days: 65.0, median_wait_days: 62.0, p90_wait_days: 80.0 },
+    { month: '2026-01', form_type: 'I-765', count: 16, avg_wait_days: 60.2, median_wait_days: 58.0, p90_wait_days: 75.0 },
+    { month: '2026-02', form_type: 'I-765', count: 10, avg_wait_days: 58.0, median_wait_days: 55.0, p90_wait_days: 72.0 },
+    { month: '2026-03', form_type: 'I-765', count: 19, avg_wait_days: 52.4, median_wait_days: 50.0, p90_wait_days: 68.0 },
+    { month: '2026-04', form_type: 'I-765', count: 15, avg_wait_days: 48.0, median_wait_days: 45.0, p90_wait_days: 62.0 },
+    { month: '2026-05', form_type: 'I-765', count: 25, avg_wait_days: 44.5, median_wait_days: 42.0, p90_wait_days: 58.0 },
+    // I-130
+    { month: '2025-10', form_type: 'I-130', count: 5, avg_wait_days: 320.0, median_wait_days: 310.0, p90_wait_days: 380.0 },
+    { month: '2025-11', form_type: 'I-130', count: 7, avg_wait_days: 315.5, median_wait_days: 305.0, p90_wait_days: 375.0 },
+    { month: '2025-12', form_type: 'I-130', count: 6, avg_wait_days: 322.0, median_wait_days: 312.0, p90_wait_days: 385.0 },
+    { month: '2026-01', form_type: 'I-130', count: 9, avg_wait_days: 310.8, median_wait_days: 300.0, p90_wait_days: 370.0 },
+    { month: '2026-02', form_type: 'I-130', count: 8, avg_wait_days: 298.0, median_wait_days: 288.0, p90_wait_days: 350.0 },
+    { month: '2026-03', form_type: 'I-130', count: 12, avg_wait_days: 292.5, median_wait_days: 282.0, p90_wait_days: 345.0 },
+    { month: '2026-04', form_type: 'I-130', count: 10, avg_wait_days: 285.0, median_wait_days: 275.0, p90_wait_days: 335.0 },
+    { month: '2026-05', form_type: 'I-130', count: 15, avg_wait_days: 278.4, median_wait_days: 268.0, p90_wait_days: 328.0 }
+  ],
+  service_centers: [
+    { service_center: 'National Benefits Center', form_type: 'I-485', approved_count: 150, pending_count: 210, avg_wait_days: 195.5 },
+    { service_center: 'Texas Service Center', form_type: 'I-130', approved_count: 40, pending_count: 35, avg_wait_days: 310.2 },
+    { service_center: 'California Service Center', form_type: 'I-485', approved_count: 65, pending_count: 80, avg_wait_days: 240.8 },
+    { service_center: 'Nebraska Service Center', form_type: 'I-485', approved_count: 45, pending_count: 55, avg_wait_days: 220.1 }
+  ],
+  weekday_distribution: [
+    { day: 'Monday', count: 48, percentage: 14.5 },
+    { day: 'Tuesday', count: 64, percentage: 19.3 },
+    { day: 'Wednesday', count: 83, percentage: 25.0 },
+    { day: 'Thursday', count: 68, percentage: 20.5 },
+    { day: 'Friday', count: 52, percentage: 15.7 },
+    { day: 'Saturday', count: 9, percentage: 2.7 },
+    { day: 'Sunday', count: 8, percentage: 2.4 }
+  ]
+};
+
 const getAdjustedCurve = (predData, caseObj) => {
   if (!predData || !predData.baseline_curve_json) return null;
   if (!caseObj) return predData.survival_curve_json;
@@ -265,6 +321,9 @@ export default function App() {
   const [isDemoMode, setIsDemoMode] = useState(true);
   const [isLightMode, setIsLightMode] = useState(false);
   const [activeTab, setActiveTab] = useState('timeline'); // 'timeline' or 'predictions'
+  const [activeView, setActiveView] = useState('tracker'); // 'tracker' or 'global'
+  const [globalData, setGlobalData] = useState(null);
+  const [isLoadingGlobal, setIsLoadingGlobal] = useState(false);
   
   // Theme Toggle Effect
   useEffect(() => {
@@ -274,6 +333,34 @@ export default function App() {
       document.documentElement.classList.remove('light');
     }
   }, [isLightMode]);
+
+  // Fetch Global Analytics Data on mount / mode change
+  useEffect(() => {
+    setIsLoadingGlobal(true);
+    if (isDemoMode) {
+      setGlobalData(MOCK_GLOBAL_DATA);
+      setIsLoadingGlobal(false);
+    } else {
+      fetch(`${BACKEND_URL}/api/analytics/global`)
+        .then(res => {
+          if (!res.ok) throw new Error("API failed");
+          return res.json();
+        })
+        .then(data => {
+          setGlobalData(data);
+        })
+        .catch(err => {
+          console.error("Error fetching global analytics:", err);
+          // Fallback
+          setGlobalData(MOCK_GLOBAL_DATA);
+        })
+        .finally(() => {
+          setIsLoadingGlobal(false);
+        });
+    }
+  }, [isDemoMode]);
+
+
 
   // Request Notification Permission on mount
   useEffect(() => {
@@ -351,6 +438,8 @@ export default function App() {
   const [compareServiceCenter, setCompareServiceCenter] = useState('');
   const [comparePredictionData, setComparePredictionData] = useState(null);
   const [chartTooltip, setChartTooltip] = useState({ x: 0, y: 0, content: '', visible: false });
+  const [activeContinentTab, setActiveContinentTab] = useState('All');
+  const [countrySearchQuery, setCountrySearchQuery] = useState('');
 
   const [queueInsights, setQueueInsights] = useState(null);
   const [isLoadingQueue, setIsLoadingQueue] = useState(false);
@@ -1365,35 +1454,67 @@ export default function App() {
 
         <div style={{ background: 'var(--bg-card)', padding: '1.2rem', borderRadius: '12px', border: '1px solid var(--border-card)' }}>
           <h3 style={{ fontSize: '0.95rem', color: 'var(--text-primary)', marginBottom: '1.2rem', fontFamily: 'var(--font-heading)' }}>Milestone Queue Progress</h3>
-          <div style={{ display: 'flex', justifyContent: 'space-between', position: 'relative', padding: '0 0.5rem', flexWrap: 'wrap', gap: '1rem' }}>
-            {steps.map((step, idx) => (
-              <div key={step.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', flex: '1 1 80px', zIndex: 2 }}>
-                <div style={{ 
-                  width: '32px', 
-                  height: '32px', 
-                  borderRadius: '50%', 
-                  background: step.completed ? 'var(--status-approved)' : (step.active ? 'var(--primary)' : 'rgba(255,255,255,0.05)'),
-                  border: `2px solid ${step.completed ? 'var(--status-approved)' : (step.active ? 'var(--primary)' : 'var(--border-card)')}`,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: step.completed || step.active ? '#ffffff' : 'var(--text-muted)',
-                  fontWeight: '700',
-                  fontSize: '0.85rem',
-                  marginBottom: '0.5rem',
-                  boxShadow: step.active ? '0 0 10px rgba(99, 102, 241, 0.4)' : 'none',
-                  transition: 'all 0.3s ease'
-                }}>
-                  {step.completed ? '✓' : idx + 1}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'relative', padding: '0 0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            {steps.map((step, idx) => {
+              let transitDays = null;
+              if (idx === 1) transitDays = queueInsights.averages.received_to_biometrics;
+              if (idx === 2) transitDays = Math.max(0, queueInsights.averages.received_to_rfe_sent - queueInsights.averages.received_to_biometrics);
+              if (idx === 3) transitDays = Math.max(0, queueInsights.averages.received_to_decision - queueInsights.averages.received_to_rfe_sent);
+
+              return (
+                <div key={step.id} style={{ display: 'flex', flex: idx > 0 ? '1 1 auto' : '0 0 auto', alignItems: 'center' }}>
+                  {/* Transit Track Line & Days Badge */}
+                  {idx > 0 && (
+                    <div style={{ display: 'flex', flex: '1 1 auto', alignItems: 'center', justifyContent: 'center', minWidth: '40px', margin: '-16px 0.3rem 0 0.3rem', position: 'relative', zIndex: 1 }}>
+                      <div style={{ height: '3px', background: step.active ? 'var(--primary)' : 'rgba(255,255,255,0.05)', width: '100%', borderRadius: '1.5px' }} />
+                      <div style={{ 
+                        position: 'absolute', 
+                        top: '-10px', 
+                        background: 'var(--bg-dark)', 
+                        border: `1px solid ${step.active ? 'var(--primary)' : 'var(--border-card)'}`,
+                        borderRadius: '10px', 
+                        padding: '0.1rem 0.4rem', 
+                        fontSize: '0.65rem', 
+                        color: step.active ? 'var(--text-primary)' : 'var(--text-muted)', 
+                        fontWeight: '700',
+                        whiteSpace: 'nowrap',
+                        boxShadow: step.active ? '0 0 8px rgba(99, 102, 241, 0.2)' : 'none'
+                      }}>
+                        +{transitDays}d
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Step node */}
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', flex: '0 0 100px', zIndex: 2 }}>
+                    <div style={{ 
+                      width: '32px', 
+                      height: '32px', 
+                      borderRadius: '50%', 
+                      background: step.completed ? 'var(--status-approved)' : (step.active ? 'var(--primary)' : 'rgba(255,255,255,0.05)'),
+                      border: `2px solid ${step.completed ? 'var(--status-approved)' : (step.active ? 'var(--primary)' : 'var(--border-card)')}`,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: step.completed || step.active ? '#ffffff' : 'var(--text-muted)',
+                      fontWeight: '700',
+                      fontSize: '0.85rem',
+                      marginBottom: '0.5rem',
+                      boxShadow: step.active ? '0 0 10px rgba(99, 102, 241, 0.4)' : 'none',
+                      transition: 'all 0.3s ease'
+                    }}>
+                      {step.completed ? '✓' : idx + 1}
+                    </div>
+                    <span style={{ fontSize: '0.8rem', fontWeight: '600', color: step.completed || step.active ? 'var(--text-primary)' : 'var(--text-muted)' }}>
+                      {step.label}
+                    </span>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
+                      {step.desc}
+                    </span>
+                  </div>
                 </div>
-                <span style={{ fontSize: '0.8rem', fontWeight: '600', color: step.completed || step.active ? 'var(--text-primary)' : 'var(--text-muted)' }}>
-                  {step.label}
-                </span>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
-                  {step.desc}
-                </span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>
@@ -1401,20 +1522,198 @@ export default function App() {
   };
 
   const renderHeatmap = () => {
+    // Determine active trends data
+    let activeTrends = [];
+    if (globalData && globalData.monthly_trends && selectedCase) {
+      activeTrends = globalData.monthly_trends.filter(t => t.form_type === selectedCase.form_type);
+    }
+    
+    // Fallback if no global data loaded or no matches
+    if (activeTrends.length === 0) {
+      // Map MOCK_HEATMAP_DATA format to match trends { month, avg_wait_days }
+      activeTrends = MOCK_HEATMAP_DATA.map(d => ({
+        month: d.month,
+        avg_wait_days: d.wait_days,
+        median_wait_days: d.wait_days,
+        p90_wait_days: d.wait_days + 45,
+        count: 15
+      }));
+    }
+
+    const height = 180;
+    const width = 580;
+    const paddingLeft = 40;
+    const paddingRight = 20;
+    const paddingTop = 20;
+    const paddingBottom = 30;
+
+    const chartWidth = width - paddingLeft - paddingRight;
+    const chartHeight = height - paddingTop - paddingBottom;
+
+    // Use p90 for scaling max wait to avoid clipping
+    const maxWait = Math.max(...activeTrends.map(t => t.p90_wait_days || (t.avg_wait_days * 1.35)), 150);
+    const p50 = predictionData?.median_wait_days || 180;
+    
+    const getX = (idx) => paddingLeft + (idx / (activeTrends.length - 1)) * chartWidth;
+    const getY = (days) => paddingTop + chartHeight - (days / maxWait) * chartHeight;
+
+    // Draw paths for Median and P90
+    // Median
+    let linePathD = `M ${getX(0)} ${getY(activeTrends[0].median_wait_days || activeTrends[0].avg_wait_days)}`;
+    let areaPathD = `M ${getX(0)} ${getY(0)} L ${getX(0)} ${getY(activeTrends[0].median_wait_days || activeTrends[0].avg_wait_days)}`;
+
+    // P90
+    let p90LinePathD = `M ${getX(0)} ${getY(activeTrends[0].p90_wait_days || (activeTrends[0].avg_wait_days * 1.35))}`;
+
+    activeTrends.forEach((t, i) => {
+      const medVal = t.median_wait_days || t.avg_wait_days;
+      const p90Val = t.p90_wait_days || (t.avg_wait_days * 1.35);
+      
+      linePathD += ` L ${getX(i)} ${getY(medVal)}`;
+      areaPathD += ` L ${getX(i)} ${getY(medVal)}`;
+      p90LinePathD += ` L ${getX(i)} ${getY(p90Val)}`;
+    });
+    areaPathD += ` L ${getX(activeTrends.length - 1)} ${getY(0)} Z`;
+
     return (
-      <div style={{ padding: '1rem', background: 'var(--bg-card)', borderRadius: '12px' }}>
-        <h3 style={{ fontSize: '1rem', color: 'var(--text-primary)', marginBottom: '1rem', fontFamily: 'var(--font-heading)' }}>Historical Processing Time by Filing Month (Simulated)</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '0.8rem' }}>
-          {MOCK_HEATMAP_DATA.map((data, i) => {
-            let bg = 'rgba(16, 185, 129, 0.15)';
+      <div style={{ padding: '1.2rem', background: 'var(--bg-card)', borderRadius: '12px', border: '1px solid var(--border-card)' }}>
+        <h3 style={{ fontSize: '1rem', color: 'var(--text-primary)', marginBottom: '0.4rem', fontFamily: 'var(--font-heading)' }}>
+          USCIS Processing Speed Trends ({selectedCase?.form_type || 'Active Case'})
+        </h3>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '1.2rem', lineHeight: '1.4' }}>
+          Historical wait days by month. Solid line shows the <strong>Median (50%)</strong>; dashed line shows the <strong>P90 (90% tail-end)</strong> speed.
+        </p>
+
+        {/* SVG Line Chart */}
+        <div style={{ position: 'relative', width: '100%', marginBottom: '1.5rem' }}>
+          <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: '100%', overflow: 'visible' }}>
+            <defs>
+              <linearGradient id="tracker-trend-grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.25" />
+                <stop offset="100%" stopColor="var(--bg-dark)" stopOpacity="0.0" />
+              </linearGradient>
+            </defs>
+
+            {/* Gridlines */}
+            {[0.25, 0.5, 0.75, 1.0].map((pct, i) => {
+              const yVal = getY(pct * maxWait);
+              return (
+                <g key={i}>
+                  <line 
+                    x1={paddingLeft} 
+                    y1={yVal} 
+                    x2={width - paddingRight} 
+                    y2={yVal} 
+                    stroke="rgba(255,255,255,0.03)" 
+                    strokeDasharray="4"
+                  />
+                  <text 
+                    x={paddingLeft - 8} 
+                    y={yVal + 3} 
+                    textAnchor="end" 
+                    fill="var(--text-muted)" 
+                    fontSize="0.65rem"
+                  >
+                    {Math.round(pct * maxWait)}d
+                  </text>
+                </g>
+              );
+            })}
+
+            {/* Axis Lines */}
+            <line x1={paddingLeft} y1={paddingTop} x2={paddingLeft} y2={height - paddingBottom} stroke="rgba(255,255,255,0.1)" />
+            <line x1={paddingLeft} y1={height - paddingBottom} x2={width - paddingRight} y2={height - paddingBottom} stroke="rgba(255,255,255,0.1)" />
+
+            {/* Paths */}
+            <path d={areaPathD} fill="url(#tracker-trend-grad)" />
+            <path d={linePathD} fill="none" stroke="var(--accent)" strokeWidth="3" strokeLinecap="round" />
+            <path d={p90LinePathD} fill="none" stroke="var(--status-denied)" strokeWidth="2.5" strokeDasharray="4 4" strokeLinecap="round" opacity="0.8" />
+
+            {/* Data Points (Median) */}
+            {activeTrends.map((t, i) => {
+              const cx = getX(i);
+              const medVal = t.median_wait_days || t.avg_wait_days;
+              const p90Val = t.p90_wait_days || (t.avg_wait_days * 1.35);
+              const cy = getY(medVal);
+              const rawLabel = t.month || "";
+              const label = rawLabel.includes('-') 
+                ? rawLabel.split('-')[1] + '/' + rawLabel.split('-')[0].substring(2)
+                : rawLabel.split(' ')[0].substring(0,3);
+
+              return (
+                <g key={i}>
+                  <circle
+                    cx={cx}
+                    cy={cy}
+                    r="4.5"
+                    fill="var(--bg-dark)"
+                    stroke="var(--accent)"
+                    strokeWidth="2.5"
+                    style={{ cursor: 'pointer' }}
+                    onMouseEnter={() => {
+                      setChartTooltip({
+                        x: cx,
+                        y: cy - 30,
+                        content: `${rawLabel}: Median ${Math.round(medVal)}d | P90 ${Math.round(p90Val)}d`,
+                        visible: true
+                      });
+                    }}
+                    onMouseLeave={() => setChartTooltip({ ...chartTooltip, visible: false })}
+                  />
+                  {/* X labels - show every alternate label if data is long */}
+                  {(i % (activeTrends.length > 8 ? 2 : 1) === 0) && (
+                    <text
+                      x={cx}
+                      y={height - 12}
+                      textAnchor="middle"
+                      fill="var(--text-muted)"
+                      fontSize="0.65rem"
+                      fontWeight="500"
+                    >
+                      {label}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+          </svg>
+        </div>
+
+        {/* Legend */}
+        <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', marginBottom: '1.2rem', fontSize: '0.75rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+            <span style={{ display: 'inline-block', width: '12px', height: '3px', background: 'var(--accent)' }} />
+            <span style={{ color: 'var(--text-secondary)' }}>Median Timeline (50%)</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+            <span style={{ display: 'inline-block', width: '12px', height: '3px', borderBottom: '2.5px dashed var(--status-denied)' }} />
+            <span style={{ color: 'var(--text-secondary)' }}>Severe Delay (P90)</span>
+          </div>
+        </div>
+
+        {/* Small breakdown grid */}
+        <h4 style={{ fontSize: '0.85rem', color: 'var(--text-primary)', marginBottom: '0.8rem', fontWeight: '600' }}>Monthly Speed Analysis (Median / P90)</h4>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '0.5rem' }}>
+          {activeTrends.map((data, i) => {
+            const med = data.median_wait_days || data.avg_wait_days;
+            const p90 = data.p90_wait_days || (data.avg_wait_days * 1.35);
+            
+            let bg = 'rgba(16, 185, 129, 0.1)';
             let border = 'var(--status-approved)';
-            if (data.wait_days >= 220) { bg = 'rgba(239, 68, 68, 0.15)'; border = 'var(--status-denied)'; }
-            else if (data.wait_days >= 180) { bg = 'rgba(245, 158, 11, 0.15)'; border = 'var(--status-rfe)'; }
+            if (med >= p50 * 1.2 || med >= 220) { 
+              bg = 'rgba(239, 68, 68, 0.1)'; 
+              border = 'var(--status-denied)'; 
+            } else if (med >= p50 || med >= 180) { 
+              bg = 'rgba(245, 158, 11, 0.1)'; 
+              border = 'var(--status-rfe)'; 
+            }
             
             return (
-              <div key={i} style={{ padding: '0.8rem', background: bg, borderBottom: `3px solid ${border}`, borderRadius: '6px', textAlign: 'center' }}>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{data.month}</div>
-                <div style={{ fontWeight: '700', color: 'var(--text-primary)', marginTop: '0.3rem' }}>{data.wait_days}d</div>
+              <div key={i} style={{ padding: '0.5rem', background: bg, borderBottom: `2.5px solid ${border}`, borderRadius: '6px', textAlign: 'center' }}>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{data.month}</div>
+                <div style={{ fontWeight: '700', color: 'var(--text-primary)', marginTop: '0.2rem', fontSize: '0.75rem' }}>
+                  {Math.round(med)}d / <span style={{ color: 'var(--text-secondary)' }}>{Math.round(p90)}d</span>
+                </div>
               </div>
             )
           })}
@@ -1422,6 +1721,583 @@ export default function App() {
       </div>
     );
   };
+
+
+  const renderGlobalAnalytics = () => {
+    if (isLoadingGlobal || !globalData) {
+      return (
+        <div style={{ display: 'flex', height: '400px', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
+          <RefreshCw size={48} className="spin" style={{ marginBottom: '1.2rem', animation: 'spin 1.5s linear infinite' }} />
+          <span style={{ fontSize: '1rem', fontWeight: '500' }}>Aggregating crowdsourced statistics...</span>
+        </div>
+      );
+    }
+
+    const nationalities = (globalData.nationalities || []).filter(n => n.country_code !== 'ROW');
+    const monthlyTrends = globalData.monthly_trends || [];
+    const serviceCenters = globalData.service_centers || [];
+
+    // Calculate Dynamic aggregates
+    const totalApproved = nationalities.reduce((sum, n) => sum + (n.approved_count || 0), 0);
+    const totalPending = nationalities.reduce((sum, n) => sum + (n.pending_count || 0), 0);
+    const totalCases = totalApproved + totalPending;
+    
+    let weightedWaitSum = 0;
+    let approvedWithWait = 0;
+    nationalities.forEach(n => {
+      if (n.avg_wait_days && n.approved_count) {
+        weightedWaitSum += n.avg_wait_days * n.approved_count;
+        approvedWithWait += n.approved_count;
+      }
+    });
+    const avgWaitDays = approvedWithWait > 0 ? Math.round(weightedWaitSum / approvedWithWait) : 190;
+
+    // Custom SVG Nationality stacked bar chart render (Top 5 only)
+    const renderNationalityChart = () => {
+      if (nationalities.length === 0) return null;
+
+      // Filter and sort for Top 5 countries by volume
+      const top5Nationalities = [...nationalities]
+        .sort((a, b) => {
+          const totalA = (a.approved_count || 0) + (a.pending_count || 0);
+          const totalB = (b.approved_count || 0) + (b.pending_count || 0);
+          return totalB - totalA;
+        })
+        .slice(0, 5);
+
+      if (top5Nationalities.length === 0) return null;
+
+      const width = 600;
+      const rowHeight = 40;
+      const paddingTop = 25;
+      const paddingBottom = 15;
+      const paddingLeft = 120;
+      const paddingRight = 40;
+      const height = paddingTop + paddingBottom + (top5Nationalities.length * rowHeight);
+
+      const chartWidth = width - paddingLeft - paddingRight;
+
+      // Find max total count of the top 5 to scale bars
+      const maxTotal = Math.max(...top5Nationalities.map(n => (n.approved_count || 0) + (n.pending_count || 0)), 1);
+
+      return (
+        <div className="chart-container" style={{ height: 'auto', position: 'relative' }}>
+          <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: '100%', overflow: 'visible' }}>
+            {/* Gridlines */}
+            {[0.25, 0.5, 0.75, 1.0].map((pct, i) => {
+              const xVal = paddingLeft + pct * chartWidth;
+              const gridLabel = Math.round(pct * maxTotal);
+              return (
+                <g key={i}>
+                  <line 
+                    x1={xVal} 
+                    y1={paddingTop - 10} 
+                    x2={xVal} 
+                    y2={height - paddingBottom} 
+                    stroke="rgba(255,255,255,0.05)" 
+                    strokeDasharray="3 3"
+                  />
+                  <text 
+                    x={xVal} 
+                    y={paddingTop - 15} 
+                    textAnchor="middle" 
+                    fill="var(--text-muted)" 
+                    fontSize="0.7rem"
+                  >
+                    {gridLabel}
+                  </text>
+                </g>
+              );
+            })}
+
+            {/* Render bars */}
+            {top5Nationalities.map((nat, idx) => {
+              const meta = COUNTRY_METADATA[nat.country_code] || { name: nat.country_code, flag: '🏳️' };
+              const rowY = paddingTop + (idx * rowHeight);
+              const barHeight = 22;
+
+              const approvedWidth = ((nat.approved_count || 0) / maxTotal) * chartWidth;
+              const pendingWidth = ((nat.pending_count || 0) / maxTotal) * chartWidth;
+              const totalVal = (nat.approved_count || 0) + (nat.pending_count || 0);
+              const approvalRate = totalVal > 0 ? Math.round(((nat.approved_count || 0) / totalVal) * 100) : 0;
+
+              return (
+                <g key={nat.country_code} className="bar-group">
+                  {/* Country Code Label on Left */}
+                  <text 
+                    x={paddingLeft - 10} 
+                    y={rowY + 15} 
+                    textAnchor="end" 
+                    fill="var(--text-primary)" 
+                    fontWeight="600" 
+                    fontSize="0.85rem"
+                  >
+                    {nat.country_code === 'ROW' ? 'Rest of World' : meta.name}
+                  </text>
+
+                  {/* Approved Bar Stack */}
+                  {approvedWidth > 0 && (
+                    <rect
+                      x={paddingLeft}
+                      y={rowY}
+                      width={approvedWidth}
+                      height={barHeight}
+                      fill="var(--status-approved)"
+                      rx={pendingWidth > 0 ? 0 : 3}
+                      opacity="0.85"
+                      style={{ cursor: 'pointer' }}
+                      onMouseEnter={(e) => {
+                        setChartTooltip({
+                          x: paddingLeft + approvedWidth / 2,
+                          y: rowY - 30,
+                          content: `${meta.name}: ${nat.approved_count} Approved (${approvalRate}% Rate)`,
+                          visible: true
+                        });
+                      }}
+                      onMouseLeave={() => setChartTooltip({ ...chartTooltip, visible: false })}
+                    />
+                  )}
+
+                  {/* Pending Bar Stack */}
+                  {pendingWidth > 0 && (
+                    <rect
+                      x={paddingLeft + approvedWidth}
+                      y={rowY}
+                      width={pendingWidth}
+                      height={barHeight}
+                      fill="var(--status-received)"
+                      rx={3}
+                      opacity="0.75"
+                      style={{ cursor: 'pointer' }}
+                      onMouseEnter={(e) => {
+                        setChartTooltip({
+                          x: paddingLeft + approvedWidth + pendingWidth / 2,
+                          y: rowY - 30,
+                          content: `${meta.name}: ${nat.pending_count} Pending`,
+                          visible: true
+                        });
+                      }}
+                      onMouseLeave={() => setChartTooltip({ ...chartTooltip, visible: false })}
+                    />
+                  )}
+
+                  {/* Total Value text on Right */}
+                  <text
+                    x={paddingLeft + approvedWidth + pendingWidth + 8}
+                    y={rowY + 15}
+                    fill="var(--text-secondary)"
+                    fontSize="0.75rem"
+                    fontWeight="500"
+                  >
+                    {totalVal}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+
+          {/* Chart Tooltip */}
+          {chartTooltip.visible && (
+            <div 
+              className="chart-tooltip" 
+              style={{ 
+                display: 'block', 
+                left: `${chartTooltip.x}px`, 
+                top: `${chartTooltip.y}px`,
+                transform: 'translateX(-50%)',
+                zIndex: 10
+              }}
+            >
+              {chartTooltip.content}
+            </div>
+          )}
+
+          {/* Simple Chart Legend */}
+          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', marginTop: '0.8rem', padding: '0.4rem 0', fontSize: '0.75rem', borderTop: '1px solid var(--border-card)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+              <span style={{ display: 'inline-block', width: '10px', height: '10px', background: 'var(--status-approved)', borderRadius: '2px' }} />
+              <span style={{ color: 'var(--text-secondary)' }}>Approved</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+              <span style={{ display: 'inline-block', width: '10px', height: '10px', background: 'var(--status-received)', borderRadius: '2px' }} />
+              <span style={{ color: 'var(--text-secondary)' }}>Pending / Tracked</span>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // Custom SVG Processing Speed Trends Line Chart
+    const renderTrendsChart = () => {
+      // Filter monthly trends for I-485 as the reference form type
+      const activeTrends = monthlyTrends.filter(t => t.form_type === 'I-485') || [];
+      if (activeTrends.length === 0) {
+        return (
+          <div style={{ display: 'flex', height: '180px', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
+            <span>No historical trend records found in database.</span>
+          </div>
+        );
+      }
+
+      const height = 200;
+      const width = 600;
+      const paddingLeft = 40;
+      const paddingRight = 20;
+      const paddingTop = 20;
+      const paddingBottom = 30;
+
+      const chartWidth = width - paddingLeft - paddingRight;
+      const chartHeight = height - paddingTop - paddingBottom;
+
+      const maxWait = Math.max(...activeTrends.map(t => t.p90_wait_days || (t.avg_wait_days * 1.35)), 150);
+      
+      const getX = (idx) => paddingLeft + (idx / (activeTrends.length - 1)) * chartWidth;
+      const getY = (days) => paddingTop + chartHeight - (days / maxWait) * chartHeight;
+
+      // Draw paths for Median and P90
+      let linePathD = `M ${getX(0)} ${getY(activeTrends[0].median_wait_days || activeTrends[0].avg_wait_days)}`;
+      let areaPathD = `M ${getX(0)} ${getY(0)} L ${getX(0)} ${getY(activeTrends[0].median_wait_days || activeTrends[0].avg_wait_days)}`;
+
+      let p90LinePathD = `M ${getX(0)} ${getY(activeTrends[0].p90_wait_days || (activeTrends[0].avg_wait_days * 1.35))}`;
+
+      activeTrends.forEach((t, i) => {
+        const medVal = t.median_wait_days || t.avg_wait_days;
+        const p90Val = t.p90_wait_days || (t.avg_wait_days * 1.35);
+
+        linePathD += ` L ${getX(i)} ${getY(medVal)}`;
+        areaPathD += ` L ${getX(i)} ${getY(medVal)}`;
+        p90LinePathD += ` L ${getX(i)} ${getY(p90Val)}`;
+      });
+      areaPathD += ` L ${getX(activeTrends.length - 1)} ${getY(0)} Z`;
+
+      return (
+        <div className="chart-container" style={{ height: 'auto', position: 'relative' }}>
+          <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: '100%', overflow: 'visible' }}>
+            <defs>
+              <linearGradient id="trend-area-grad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.2" />
+                <stop offset="100%" stopColor="var(--bg-dark)" stopOpacity="0.0" />
+              </linearGradient>
+            </defs>
+
+            {/* Gridlines */}
+            {[0.25, 0.5, 0.75, 1.0].map((pct, i) => {
+              const yVal = getY(pct * maxWait);
+              return (
+                <g key={i}>
+                  <line 
+                    x1={paddingLeft} 
+                    y1={yVal} 
+                    x2={width - paddingRight} 
+                    y2={yVal} 
+                    stroke="rgba(255,255,255,0.03)" 
+                    strokeDasharray="4"
+                  />
+                  <text 
+                    x={paddingLeft - 8} 
+                    y={yVal + 3} 
+                    textAnchor="end" 
+                    fill="var(--text-muted)" 
+                    fontSize="0.65rem"
+                  >
+                    {Math.round(pct * maxWait)}d
+                  </text>
+                </g>
+              );
+            })}
+
+            {/* Axis Lines */}
+            <line x1={paddingLeft} y1={paddingTop} x2={paddingLeft} y2={height - paddingBottom} stroke="rgba(255,255,255,0.1)" />
+            <line x1={paddingLeft} y1={height - paddingBottom} x2={width - paddingRight} y2={height - paddingBottom} stroke="rgba(255,255,255,0.1)" />
+
+            {/* Trend Area & Line */}
+            <path d={areaPathD} fill="url(#trend-area-grad)" />
+            <path d={linePathD} fill="none" stroke="var(--accent)" strokeWidth="2.5" strokeLinecap="round" />
+            <path d={p90LinePathD} fill="none" stroke="var(--status-denied)" strokeWidth="2" strokeDasharray="4 4" strokeLinecap="round" opacity="0.8" />
+
+            {/* Interactive Data Dots (Median) */}
+            {activeTrends.map((t, i) => {
+              const cx = getX(i);
+              const medVal = t.median_wait_days || t.avg_wait_days;
+              const p90Val = t.p90_wait_days || (t.avg_wait_days * 1.35);
+              const cy = getY(medVal);
+              const monthLabel = t.month.split('-')[1] + '/' + t.month.split('-')[0].substring(2);
+              return (
+                <g key={i}>
+                  <circle
+                    cx={cx}
+                    cy={cy}
+                    r="4.5"
+                    fill="var(--bg-dark)"
+                    stroke="var(--accent)"
+                    strokeWidth="2"
+                    style={{ cursor: 'pointer' }}
+                    onMouseEnter={() => {
+                      setChartTooltip({
+                        x: cx,
+                        y: cy - 30,
+                        content: `${t.month}: Median ${Math.round(medVal)}d | P90 ${Math.round(p90Val)}d (${t.count} cases)`,
+                        visible: true
+                      });
+                    }}
+                    onMouseLeave={() => setChartTooltip({ ...chartTooltip, visible: false })}
+                  />
+                  {/* X Axis Labels */}
+                  <text
+                    x={cx}
+                    y={height - 12}
+                    textAnchor="middle"
+                    fill="var(--text-muted)"
+                    fontSize="0.65rem"
+                    fontWeight="500"
+                  >
+                    {monthLabel}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+
+          {/* Tooltip */}
+          {chartTooltip.visible && (
+            <div 
+              className="chart-tooltip" 
+              style={{ 
+                display: 'block', 
+                left: `${chartTooltip.x}px`, 
+                top: `${chartTooltip.y}px`,
+                transform: 'translateX(-50%)',
+                zIndex: 10
+              }}
+            >
+              {chartTooltip.content}
+            </div>
+          )}
+
+          {/* Legend */}
+          <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', marginTop: '0.8rem', padding: '0.4rem 0', fontSize: '0.75rem', borderTop: '1px solid var(--border-card)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+              <span style={{ display: 'inline-block', width: '12px', height: '3px', background: 'var(--accent)' }} />
+              <span style={{ color: 'var(--text-secondary)' }}>Median (50%)</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+              <span style={{ display: 'inline-block', width: '12px', height: '3px', borderBottom: '2.5px dashed var(--status-denied)' }} />
+              <span style={{ color: 'var(--text-secondary)' }}>Severe Delay (P90)</span>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+        
+        {/* Global KPIs Panel */}
+        <div className="stats-grid">
+          <div className="stat-tile" style={{ borderLeft: '4px solid var(--primary)' }}>
+            <div className="stat-value">{totalCases}</div>
+            <div className="stat-label">Total Tracked Cases</div>
+          </div>
+          <div className="stat-tile" style={{ borderLeft: '4px solid var(--status-approved)' }}>
+            <div className="stat-value">{totalApproved}</div>
+            <div className="stat-label">Approved Milestones</div>
+          </div>
+          <div className="stat-tile" style={{ borderLeft: '4px solid var(--status-received)' }}>
+            <div className="stat-value">{totalPending}</div>
+            <div className="stat-label">Pending Timeline Cases</div>
+          </div>
+          <div className="stat-tile" style={{ borderLeft: '4px solid var(--accent)' }}>
+            <div className="stat-value">{avgWaitDays}d</div>
+            <div className="stat-label">Global Average Wait Time</div>
+          </div>
+        </div>
+
+        {/* Two-Column Analytics Layout */}
+        <div className="global-grid">
+          
+          {/* Nationality Section */}
+          <div className="glass-card">
+            <h2 className="card-title">
+              <Activity size={20} style={{ color: 'var(--primary)' }} />
+              Nationality Approvals Distribution
+            </h2>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.2rem', lineHeight: '1.4' }}>
+              Compare cumulative case approvals and pending queues across birth country chargeabilities. Hover over bars to see approval rates.
+            </p>
+            {renderNationalityChart()}
+
+            {/* Detailed Table breakdown replaced with interactive searchable directory */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem', marginTop: '1.8rem', borderTop: '1px solid var(--border-card)', paddingTop: '1.2rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.9rem', fontWeight: '600', color: 'var(--text-primary)' }}>
+                  All Tracked Chargeabilities
+                </span>
+                
+                {/* Search Box */}
+                <div style={{ maxWidth: '200px', width: '100%' }}>
+                  <div className="country-search-wrapper">
+                    <Search size={14} className="country-search-icon" />
+                    <input
+                      type="text"
+                      placeholder="Search country..."
+                      className="country-search-input"
+                      value={countrySearchQuery}
+                      onChange={(e) => setCountrySearchQuery(e.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Continent Tabs */}
+              <div className="continent-tabs" style={{ marginTop: '0.2rem' }}>
+                {['All', 'Asia', 'Europe', 'Africa', 'North America', 'South America', 'Oceania'].map(tab => (
+                  <button
+                    key={tab}
+                    className={`continent-tab-btn ${activeContinentTab === tab ? 'active' : ''}`}
+                    onClick={() => setActiveContinentTab(tab)}
+                  >
+                    {tab}
+                  </button>
+                ))}
+              </div>
+
+              {/* Grid directory */}
+              <div className="country-grid-container">
+                {(() => {
+                  const filtered = nationalities.filter(nat => {
+                    const meta = COUNTRY_METADATA[nat.country_code] || { name: nat.country_code, flag: '🏳️', continent: 'Other' };
+                    const searchLower = countrySearchQuery.toLowerCase().trim();
+                    const matchesSearch = meta.name.toLowerCase().includes(searchLower) || nat.country_code.toLowerCase().includes(searchLower);
+                    const matchesContinent = activeContinentTab === 'All' || meta.continent === activeContinentTab;
+                    return matchesSearch && matchesContinent;
+                  }).sort((a, b) => {
+                    const totalA = (a.approved_count || 0) + (a.pending_count || 0);
+                    const totalB = (b.approved_count || 0) + (b.pending_count || 0);
+                    return totalB - totalA;
+                  });
+
+                  if (filtered.length === 0) {
+                    return (
+                      <div style={{ textAlign: 'center', padding: '2rem 1rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                        No chargeabilities match your filters.
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="country-grid">
+                      {filtered.map(nat => {
+                        const meta = COUNTRY_METADATA[nat.country_code] || { name: nat.country_code, flag: '🏳️', continent: 'Other' };
+                        const totalVal = (nat.approved_count || 0) + (nat.pending_count || 0);
+                        const approvalRate = totalVal > 0 ? Math.round(((nat.approved_count || 0) / totalVal) * 100) : 0;
+                        return (
+                          <div key={nat.country_code} className="country-card">
+                            {/* Wait Time Badge */}
+                            {nat.avg_wait_days > 0 && (
+                              <div className="country-card-wait" title="Average wait time">
+                                {Math.round(nat.avg_wait_days)}d
+                              </div>
+                            )}
+
+                            {/* Header: Flag + Code / Name */}
+                            <div className="country-card-header" title={`${meta.name} (${nat.country_code})`}>
+                              <span className="country-card-flag">{meta.flag}</span>
+                              <span className="country-card-name">{meta.name}</span>
+                            </div>
+
+                            {/* Stats */}
+                            <div className="country-card-stats">
+                              <div className="country-card-stat">
+                                <span className="country-card-stat-label">Approved</span>
+                                <span className="country-card-stat-value" style={{ color: 'var(--status-approved)' }}>
+                                  {nat.approved_count || 0}
+                                </span>
+                              </div>
+                              <div className="country-card-stat">
+                                <span className="country-card-stat-label">Pending</span>
+                                <span className="country-card-stat-value" style={{ color: 'var(--status-received)' }}>
+                                  {nat.pending_count || 0}
+                                </span>
+                              </div>
+                              <div className="country-card-stat" style={{ textAlign: 'right' }}>
+                                <span className="country-card-stat-label">Total</span>
+                                <span className="country-card-stat-value">{totalVal}</span>
+                              </div>
+                            </div>
+
+                            {/* Approval rate mini progress bar */}
+                            <div className="country-card-progress-wrapper">
+                              <div className="country-card-progress-bar">
+                                <div className="country-card-progress-fill" style={{ width: `${approvalRate}%`, background: 'var(--status-approved)' }} />
+                              </div>
+                              <span className="country-card-rate">{approvalRate}%</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          </div>
+
+          {/* Right Column: Processing Trends & Service Center Stats */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+            
+            {/* Trends Section */}
+            <div className="glass-card">
+              <h2 className="card-title">
+                <TrendingUp size={20} style={{ color: 'var(--accent)' }} />
+                USCIS Velocity: Recent Processing Trends
+              </h2>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.2rem', lineHeight: '1.4' }}>
+                Median processing time (days) charted by approval month for <strong>I-485</strong> cases. Upward lines indicate delays; downward lines indicate speedups.
+              </p>
+              {renderTrendsChart()}
+            </div>
+
+            {/* Service Center Standings */}
+            <div className="glass-card">
+              <h2 className="card-title">
+                <Layers size={20} style={{ color: 'var(--secondary)' }} />
+                Service Center Performance Comparisons
+              </h2>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1.2rem', lineHeight: '1.4' }}>
+                Aggregate average processing times across different USCIS physical processing offices.
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                {serviceCenters.map((sc, idx) => {
+                  const maxWaitCenter = Math.max(...serviceCenters.map(s => s.avg_wait_days), 320);
+                  const barPct = (sc.avg_wait_days / maxWaitCenter) * 100;
+                  
+                  return (
+                    <div key={idx} style={{ background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-card)', padding: '0.8rem 1rem', borderRadius: '8px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', fontWeight: '600', marginBottom: '0.4rem' }}>
+                        <span style={{ color: 'var(--text-primary)' }}>{sc.service_center}</span>
+                        <span style={{ color: 'var(--text-secondary)' }}>{sc.form_type}: <strong style={{ color: 'var(--text-primary)' }}>{sc.avg_wait_days}d</strong></span>
+                      </div>
+                      <div style={{ height: '6px', background: 'rgba(255,255,255,0.05)', borderRadius: '3px', overflow: 'hidden' }}>
+                        <div style={{ width: `${barPct}%`, height: '100%', background: 'linear-gradient(90deg, var(--secondary) 0%, var(--primary) 100%)', borderRadius: '3px' }} />
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+                        <span>Approved: {sc.approved_count}</span>
+                        <span>Pending: {sc.pending_count}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+
+      </div>
+    );
+  };
+
 
   return (
     <div className="app-container">
@@ -1434,14 +2310,32 @@ export default function App() {
         
         {/* Header Actions */}
         <div style={{ display: 'flex', gap: '0.8rem', alignItems: 'center' }}>
+          <div className="tab-nav" style={{ margin: 0, padding: '0.2rem', display: 'flex' }}>
+            <button 
+              className={`tab-btn ${activeView === 'tracker' ? 'active' : ''}`}
+              onClick={() => setActiveView('tracker')}
+              style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+            >
+              My Case Tracker
+            </button>
+            <button 
+              className={`tab-btn ${activeView === 'global' ? 'active' : ''}`}
+              onClick={() => setActiveView('global')}
+              style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+            >
+              Global Analytics
+            </button>
+          </div>
+
           <button
             className="btn btn-secondary"
-            style={{ padding: '0.4rem', width: 'auto', borderRadius: '50%' }}
+            style={{ padding: '0.4rem', width: 'auto', borderRadius: '50%', height: '32px', minHeight: '32px' }}
             onClick={() => setIsLightMode(!isLightMode)}
             title="Toggle Light/Dark Mode"
           >
             {isLightMode ? <Moon size={16} /> : <Sun size={16} />}
           </button>
+
           
           <button 
             className={`btn btn-secondary`} 
@@ -1464,7 +2358,8 @@ export default function App() {
       </header>
 
       {/* Main Grid Workspace */}
-      <div className="dashboard-grid">
+      {activeView === 'tracker' ? (
+        <div className="dashboard-grid">
         
         {/* LEFT COLUMN: Input Form & Case Selector */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
@@ -1791,7 +2686,7 @@ export default function App() {
                   onClick={() => setActiveTab('predictions')}
                   style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
                 >
-                  Survival Curve
+                  Approval Probability
                 </button>
                 <button 
                   className={`tab-btn ${activeTab === 'queue' ? 'active' : ''}`}
@@ -1864,6 +2759,88 @@ export default function App() {
                     </strong>
                   </div>
                 </div>
+
+                {/* How I Compare Wait Time Gauge */}
+                {predictionData && (
+                  <div className="compare-gauge-card" style={{ marginBottom: '1.5rem', background: 'rgba(31, 41, 55, 0.25)', border: '1px solid var(--border-card)', borderRadius: '12px', padding: '1.2rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.8rem' }}>
+                      <span style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <Clock size={16} style={{ color: 'var(--primary)' }} />
+                        Timeline Alignment: How You Compare
+                      </span>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                        Filing Age: <strong>{calculateDaysElapsed(selectedCase.filed_date, selectedCase.completed_date)} days</strong>
+                      </span>
+                    </div>
+
+                    {(() => {
+                      const mainCurve = getAdjustedCurve(predictionData, selectedCase) || (predictionData?.survival_curve_json || []);
+                      const p25 = getPercentileDays(mainCurve, 0.25) || predictionData?.p25_wait_days || 90;
+                      const p50 = getPercentileDays(mainCurve, 0.50) || predictionData?.median_wait_days || 180;
+                      const p75 = getPercentileDays(mainCurve, 0.75) || predictionData?.p75_wait_days || 270;
+                      const days = calculateDaysElapsed(selectedCase.filed_date, selectedCase.completed_date);
+                      
+                      const maxDays = Math.max(p75 * 1.25, days * 1.1, 100);
+                      const userPct = Math.min(100, (days / maxDays) * 100);
+                      const p25Pct = (p25 / maxDays) * 100;
+                      const p50Pct = (p50 / maxDays) * 100;
+                      const p75Pct = (p75 / maxDays) * 100;
+
+                      let statusMsg = "";
+                      let statusColor = "var(--primary)";
+                      if (days < p25) {
+                        statusMsg = `Moving exceptionally fast! Your case is in the top 25% (earlier than ${p25} days).`;
+                        statusColor = "var(--status-approved)";
+                      } else if (days < p50) {
+                        statusMsg = `Ahead of median pace! You are progressing faster than 50% of applicants (median ${p50} days).`;
+                        statusColor = "var(--accent)";
+                      } else if (days < p75) {
+                        statusMsg = `Standard range. Under 75% of similar cases complete by Day ${p75}.`;
+                        statusColor = "var(--status-rfe)";
+                      } else {
+                        statusMsg = `Delayed timeline. Your case has exceeded 75% of peers (average ${p50}d, threshold ${p75}d).`;
+                        statusColor = "var(--status-denied)";
+                      }
+
+                      return (
+                        <div>
+                          {/* Gauge Track */}
+                          <div style={{ position: 'relative', height: '28px', background: 'rgba(255,255,255,0.03)', borderRadius: '6px', border: '1px solid var(--border-card)', margin: '1.5rem 0 0.8rem 0', overflow: 'visible' }}>
+                            {/* Color Zones */}
+                            <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: `${p25Pct}%`, background: 'rgba(16, 185, 129, 0.08)', borderRadius: '5px 0 0 5px' }} title="Fast Track Zone" />
+                            <div style={{ position: 'absolute', left: `${p25Pct}%`, top: 0, bottom: 0, width: `${p50Pct - p25Pct}%`, background: 'rgba(20, 184, 166, 0.05)' }} title="Average Track Zone" />
+                            <div style={{ position: 'absolute', left: `${p50Pct}%`, top: 0, bottom: 0, width: `${p75Pct - p50Pct}%`, background: 'rgba(245, 158, 11, 0.05)' }} title="Late Zone" />
+                            <div style={{ position: 'absolute', left: `${p75Pct}%`, top: 0, bottom: 0, right: 0, background: 'rgba(239, 68, 68, 0.06)', borderRadius: '0 5px 5px 0' }} title="Extended Delay Zone" />
+
+                            {/* Brackets Tick Lines */}
+                            <div style={{ position: 'absolute', left: `${p25Pct}%`, top: 0, bottom: 0, width: '1px', background: 'rgba(255,255,255,0.15)' }}>
+                              <span style={{ position: 'absolute', top: '-18px', left: '-50%', transform: 'translateX(-50%)', fontSize: '0.65rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>25% ({p25}d)</span>
+                            </div>
+                            <div style={{ position: 'absolute', left: `${p50Pct}%`, top: 0, bottom: 0, width: '2px', background: 'var(--primary)', opacity: 0.5 }}>
+                              <span style={{ position: 'absolute', top: '-18px', left: '-50%', transform: 'translateX(-50%)', fontSize: '0.65rem', color: 'var(--primary)', fontWeight: '700', whiteSpace: 'nowrap' }}>Median ({p50}d)</span>
+                            </div>
+                            <div style={{ position: 'absolute', left: `${p75Pct}%`, top: 0, bottom: 0, width: '1px', background: 'rgba(255,255,255,0.15)' }}>
+                              <span style={{ position: 'absolute', top: '-18px', left: '-50%', transform: 'translateX(-50%)', fontSize: '0.65rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>75% ({p75}d)</span>
+                            </div>
+
+                            {/* User Position Indicator */}
+                            <div style={{ position: 'absolute', left: `${userPct}%`, top: '-4px', bottom: '-4px', width: '4px', background: statusColor, borderRadius: '2px', boxShadow: `0 0 10px ${statusColor}`, zIndex: 5, overflow: 'visible' }}>
+                              <div style={{ position: 'absolute', bottom: '-22px', left: '-50%', transform: 'translateX(-50%)', background: 'var(--bg-dark)', border: `1px solid ${statusColor}`, color: '#fff', fontSize: '0.7rem', fontWeight: '800', padding: '0.1rem 0.3rem', borderRadius: '4px', whiteSpace: 'nowrap' }}>
+                                You: {days}d
+                              </div>
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '1.8rem', fontSize: '0.8rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.01)', padding: '0.5rem 0.8rem', borderRadius: '6px' }}>
+                            <span style={{ display: 'inline-block', width: '8px', height: '8px', background: statusColor, borderRadius: '50%' }} />
+                            <span>{statusMsg}</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+
 
                 {/* Sub-Panel: Survival Curve View */}
                 {activeTab === 'predictions' ? (
@@ -1994,6 +2971,9 @@ export default function App() {
         </div>
 
       </div>
+      ) : (
+        renderGlobalAnalytics()
+      )}
     </div>
   );
 }
