@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 # Import our custom clients and modules
 from uscis_client import USCISClient
 from batch_analytics import run_survival_analysis, parse_date
+import receipt_utils
 
 # Load environment variables
 load_dotenv()
@@ -42,16 +43,394 @@ uscis = USCISClient()
 class CaseSyncRequest(BaseModel):
     receipt_number: str
     user_id: str
-    form_type: str        # User provides, or retrieved from API
-    service_center: str   # User provides, or retrieved from API
-    filed_date: str       # YYYY-MM-DD
+    form_type: Optional[str] = None
+    service_center: Optional[str] = None
+    filed_date: Optional[str] = None
     concurrent_filing: Optional[bool] = False
     premium_processed: Optional[bool] = False
     country_code: Optional[str] = "ROW"
 
+class ReceiptLookupRequest(BaseModel):
+    receipt_number: str
+
+class CaseSaveRequest(BaseModel):
+    receipt_number: str
+    user_id: str = "dev_user_1"
+    form_type: Optional[str] = None
+    service_center: Optional[str] = None
+    filed_date: Optional[str] = None
+    concurrent_filing: Optional[bool] = False
+    premium_processed: Optional[bool] = False
+    country_code: Optional[str] = "ROW"
+
+
 @app.get("/")
 def read_root():
     return {"message": "Welcome to the Crowdsourced Immigration Timeline Predictor API"}
+
+def log_sync_attempt(environment: str, endpoint: str, receipt_number: str, http_status: int, success: bool, response_time_ms: float, error_code: Optional[str] = None, error_message: Optional[str] = None):
+    if not supabase:
+        return
+    try:
+        prefix = receipt_utils.get_receipt_prefix(receipt_number)
+        seq = receipt_utils.get_receipt_numeric_sequence(receipt_number)
+        last4 = seq[-4:] if len(seq) >= 4 else seq
+        
+        supabase.table("sync_logs").insert({
+            "environment": environment,
+            "endpoint": endpoint,
+            "receipt_prefix": prefix,
+            "receipt_number_last4": last4,
+            "http_status": http_status,
+            "success": success,
+            "response_time_ms": response_time_ms,
+            "error_code": error_code,
+            "error_message": error_message
+        }).execute()
+    except Exception as e:
+        logger.warning(f"Failed to write to sync_logs table (it might not exist yet): {str(e)}")
+
+@app.post("/api/lookup")
+async def lookup_receipt(request: ReceiptLookupRequest):
+    import time
+    receipt_num = receipt_utils.normalize_receipt_number(request.receipt_number)
+    if not receipt_utils.validate_receipt_number(receipt_num):
+        raise HTTPException(status_code=400, detail="Invalid receipt number format. Must be 3 letters followed by 10 numbers.")
+        
+    prefix = receipt_utils.get_receipt_prefix(receipt_num)
+    service_center = receipt_utils.infer_service_center(receipt_num)
+    
+    start_time = time.time()
+    result = await uscis.fetch_case_status(receipt_num)
+    duration_ms = (time.time() - start_time) * 1000
+    
+    log_sync_attempt(
+        environment="sandbox",
+        endpoint="/api/lookup",
+        receipt_number=receipt_num,
+        http_status=result.get("http_status", 200) if result.get("success") else result.get("http_status", 400),
+        success=result.get("success", False),
+        response_time_ms=duration_ms,
+        error_code=result.get("error_code") if not result.get("success") else None,
+        error_message=result.get("error_message") if not result.get("success") else None
+    )
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=result.get("http_status", 400), detail=result.get("error_message", "USCIS API Error"))
+        
+    return {
+        "receipt_number": receipt_num,
+        "receipt_prefix": prefix,
+        "service_center_inferred": service_center,
+        "success": True,
+        "http_status": 200,
+        "current_status": result.get("current_status"),
+        "current_status_date": result.get("current_status_date"),
+        "filed_date": None,
+        "form_type": result.get("form_type"),
+        "data_source": "uscis_sandbox",
+        "data_confidence": "Sandbox",
+        "missing_fields": ["filed_date"]
+    }
+
+@app.post("/api/cases")
+async def save_case(request: CaseSaveRequest):
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database client not configured.")
+        
+    receipt_num = receipt_utils.normalize_receipt_number(request.receipt_number)
+    if not receipt_utils.validate_receipt_number(receipt_num):
+        raise HTTPException(status_code=400, detail="Invalid receipt number format.")
+        
+    prefix = receipt_utils.get_receipt_prefix(receipt_num)
+    service_center = request.service_center or receipt_utils.infer_service_center(receipt_num)
+    
+    import time
+    start_time = time.time()
+    result = await uscis.fetch_case_status(receipt_num)
+    duration_ms = (time.time() - start_time) * 1000
+    
+    status_text = "Case Was Received"
+    status_date = None
+    form_type = request.form_type
+    
+    if result.get("success"):
+        status_text = result.get("current_status", status_text)
+        status_date = result.get("current_status_date")
+        if not form_type:
+            form_type = result.get("form_type")
+            
+    log_sync_attempt(
+        environment="sandbox",
+        endpoint="/api/cases",
+        receipt_number=receipt_num,
+        http_status=result.get("http_status", 200) if result.get("success") else result.get("http_status", 400),
+        success=result.get("success", False),
+        response_time_ms=duration_ms,
+        error_code=result.get("error_code") if not result.get("success") else None,
+        error_message=result.get("error_message") if not result.get("success") else None
+    )
+
+    status_lower = status_text.lower()
+    is_completed = "approved" in status_lower or "denied" in status_lower
+    completed_date = status_date if is_completed else None
+    
+    case_record = {
+        "user_id": request.user_id,
+        "receipt_number": receipt_num,
+        "receipt_prefix": prefix,
+        "receipt_number_last4": receipt_num[-4:],
+        "form_type": form_type or "Unknown",
+        "service_center": service_center,
+        "filed_date": request.filed_date if request.filed_date else None,
+        "current_status": status_text,
+        "current_status_date": status_date,
+        "completed_date": completed_date,
+        "is_completed": is_completed,
+        "data_source": "uscis_sandbox",
+        "data_confidence": "Sandbox",
+        "last_sync_date": "now()",
+        "concurrent_filing": request.concurrent_filing,
+        "premium_processed": request.premium_processed,
+        "country_code": request.country_code or "ROW"
+    }
+    
+    try:
+        try:
+            case_response = supabase.table("cases").upsert(
+                case_record,
+                on_conflict="receipt_number"
+            ).execute()
+        except Exception as db_err:
+            logger.warning(f"Extended schema upsert failed, trying fallback schema: {str(db_err)}")
+            fallback_record = {
+                "user_id": request.user_id,
+                "receipt_number": receipt_num,
+                "form_type": form_type or "Unknown",
+                "service_center": service_center,
+                "filed_date": request.filed_date if request.filed_date else "1970-01-01",
+                "current_status": status_text,
+                "last_sync_date": "now()",
+                "completed_date": completed_date,
+                "concurrent_filing": request.concurrent_filing,
+                "premium_processed": request.premium_processed,
+                "country_code": request.country_code or "ROW"
+            }
+            case_response = supabase.table("cases").upsert(
+                fallback_record,
+                on_conflict="receipt_number"
+            ).execute()
+            
+        if not case_response.data:
+            raise HTTPException(status_code=500, detail="Failed to write case to database.")
+            
+        case_id = case_response.data[0]["id"]
+        
+        try:
+            if request.filed_date:
+                supabase.table("milestones").upsert({
+                    "case_id": case_id,
+                    "milestone_type": "RECEIVED",
+                    "event_date": request.filed_date
+                }, on_conflict="case_id,milestone_type").execute()
+                
+            if is_completed:
+                m_type = "APPROVED" if "approved" in status_lower else "DENIED"
+                if completed_date:
+                    supabase.table("milestones").upsert({
+                        "case_id": case_id,
+                        "milestone_type": m_type,
+                        "event_date": completed_date
+                    }, on_conflict="case_id,milestone_type").execute()
+        except Exception as m_err:
+            logger.warning(f"Milestones upsert failed: {str(m_err)}")
+            
+        try:
+            supabase.table("case_status_snapshots").insert({
+                "case_id": case_id,
+                "receipt_prefix": prefix,
+                "receipt_number_last4": receipt_num[-4:],
+                "status_text": status_text,
+                "status_date": status_date,
+                "http_status": 200 if result.get("success") else result.get("http_status", 400),
+                "success": result.get("success", False),
+                "source": "uscis_sandbox",
+                "raw_response": result.get("raw_response", {})
+            }).execute()
+        except Exception as snap_err:
+            logger.warning(f"Snapshot insert failed: {str(snap_err)}")
+            
+        full_case_response = supabase.table("cases")\
+            .select("*, milestones(*)")\
+            .eq("id", case_id)\
+            .execute()
+            
+        return {
+            "success": True,
+            "case": full_case_response.data[0]
+        }
+    except Exception as e:
+        logger.error(f"Error saving case: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+@app.post("/api/cases/{case_id}/refresh")
+async def refresh_case(case_id: str):
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database client not configured.")
+        
+    try:
+        res = supabase.table("cases").select("*").eq("id", case_id).execute()
+        if not res.data:
+            raise HTTPException(status_code=404, detail="Case not found.")
+            
+        curr_case = res.data[0]
+        receipt_num = curr_case["receipt_number"]
+        
+        import time
+        start_time = time.time()
+        result = await uscis.fetch_case_status(receipt_num)
+        duration_ms = (time.time() - start_time) * 1000
+        
+        log_sync_attempt(
+            environment="sandbox",
+            endpoint=f"/api/cases/refresh",
+            receipt_number=receipt_num,
+            http_status=result.get("http_status", 200) if result.get("success") else result.get("http_status", 400),
+            success=result.get("success", False),
+            response_time_ms=duration_ms,
+            error_code=result.get("error_code") if not result.get("success") else None,
+            error_message=result.get("error_message") if not result.get("success") else None
+        )
+        
+        if not result.get("success"):
+            raise HTTPException(status_code=result.get("http_status", 400), detail=result.get("error_message", "Refresh failed."))
+            
+        status_text = result.get("current_status")
+        status_date = result.get("current_status_date")
+        
+        status_lower = status_text.lower()
+        is_completed = "approved" in status_lower or "denied" in status_lower
+        completed_date = status_date if is_completed else None
+        
+        update_record = {
+            "current_status": status_text,
+            "current_status_date": status_date,
+            "completed_date": completed_date,
+            "is_completed": is_completed,
+            "last_sync_date": "now()",
+            "last_checked_at": "now()",
+            "updated_at": "now()"
+        }
+        
+        try:
+            supabase.table("cases").update(update_record).eq("id", case_id).execute()
+        except Exception:
+            fallback_update = {
+                "current_status": status_text,
+                "completed_date": completed_date,
+                "last_sync_date": "now()"
+            }
+            supabase.table("cases").update(fallback_update).eq("id", case_id).execute()
+            
+        try:
+            supabase.table("case_status_snapshots").insert({
+                "case_id": case_id,
+                "receipt_prefix": receipt_num[:3],
+                "receipt_number_last4": receipt_num[-4:],
+                "status_text": status_text,
+                "status_date": status_date,
+                "http_status": 200,
+                "success": True,
+                "source": "uscis_sandbox",
+                "raw_response": result.get("raw_response", {})
+            }).execute()
+        except Exception as snap_err:
+            logger.warning(f"Snapshot insert failed: {snap_err}")
+            
+        full_case_response = supabase.table("cases")\
+            .select("*, milestones(*)")\
+            .eq("id", case_id)\
+            .execute()
+            
+        return {
+            "success": True,
+            "case": full_case_response.data[0]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error refreshing case: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+@app.get("/api/admin/sandbox-traffic-summary")
+async def get_sandbox_traffic_summary():
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Database client not configured.")
+        
+    try:
+        res = supabase.table("sync_logs").select("*").execute()
+        logs = res.data or []
+        
+        df = pd.DataFrame(logs)
+        if df.empty:
+            return {
+                "environment": "sandbox",
+                "days": [],
+                "consecutive_days": 0,
+                "ready_for_production_request": False
+            }
+            
+        df['date'] = pd.to_datetime(df['checked_at']).dt.date.astype(str)
+        grouped = df.groupby('date')
+        days_summary = []
+        for date_str, group in grouped:
+            total = len(group)
+            success_200 = int((group['http_status'] == 200).sum())
+            client_errors = int(((group['http_status'] >= 400) & (group['http_status'] < 500)).sum())
+            server_errors = int((group['http_status'] >= 500).sum())
+            avg_time = float(group['response_time_ms'].mean()) if 'response_time_ms' in group else 0.0
+            
+            days_summary.append({
+                "date": date_str,
+                "total_requests": total,
+                "success_200": success_200,
+                "client_errors_4xx": client_errors,
+                "server_errors_5xx": server_errors,
+                "avg_response_time_ms": round(avg_time, 1)
+            })
+            
+        days_summary.sort(key=lambda x: x['date'])
+        unique_dates = sorted(list(df['date'].unique()))
+        consecutive = 0
+        if unique_dates:
+            consecutive = 1
+            max_consec = 1
+            for idx in range(1, len(unique_dates)):
+                d1 = datetime.strptime(unique_dates[idx-1], "%Y-%m-%d")
+                d2 = datetime.strptime(unique_dates[idx], "%Y-%m-%d")
+                if (d2 - d1).days == 1:
+                    consecutive += 1
+                    max_consec = max(max_consec, consecutive)
+                elif (d2 - d1).days > 1:
+                    consecutive = 1
+            consecutive = max_consec
+            
+        return {
+            "environment": "sandbox",
+            "days": days_summary,
+            "consecutive_days": consecutive,
+            "ready_for_production_request": consecutive >= 5
+        }
+    except Exception as e:
+        logger.error(f"Error compiling sandbox traffic summary: {str(e)}")
+        return {
+            "environment": "sandbox",
+            "days": [],
+            "consecutive_days": 0,
+            "ready_for_production_request": False,
+            "note": "sync_logs table does not exist or database query failed."
+        }
+
 
 @app.get("/api/predictions")
 async def get_predictions(
@@ -110,64 +489,101 @@ async def sync_case(request: CaseSyncRequest):
     if not supabase:
         raise HTTPException(status_code=500, detail="Database client not configured.")
 
-    receipt_num = request.receipt_number.strip()
+    receipt_num = receipt_utils.normalize_receipt_number(request.receipt_number)
+    if not receipt_utils.validate_receipt_number(receipt_num):
+        raise HTTPException(status_code=400, detail="Invalid receipt number format.")
+
     user_id = request.user_id
+    prefix = receipt_utils.get_receipt_prefix(receipt_num)
+    service_center = request.service_center or receipt_utils.infer_service_center(receipt_num)
     
+    import time
+    start_time = time.time()
     # 1. Fetch case status from USCIS Sandbox API
     uscis_data = await uscis.fetch_case_status(receipt_num)
+    duration_ms = (time.time() - start_time) * 1000
+
+    log_sync_attempt(
+        environment="sandbox",
+        endpoint="/api/cases/sync",
+        receipt_number=receipt_num,
+        http_status=uscis_data.get("http_status", 200) if uscis_data.get("success") else uscis_data.get("http_status", 400),
+        success=uscis_data.get("success", False),
+        response_time_ms=duration_ms,
+        error_code=uscis_data.get("error_code") if not uscis_data.get("success") else None,
+        error_message=uscis_data.get("error_message") if not uscis_data.get("success") else None
+    )
     
-    if "error" in uscis_data:
-        if uscis_data["error"] == "Case not found in Sandbox environment.":
-            logger.warning(f"Case {receipt_num} not found in Sandbox. Initializing local database record with 'Case Was Received'.")
-            status_text = "Case Was Received"
-            submitted_date = parse_date(request.filed_date)
-            modified_date = None
-            is_completed = False
-            completed_date = None
-        else:
-            # Genuine API connection/authentication or bad request errors (e.g. 401, 422) should still fail
-            logger.warning(f"USCIS API lookup failed for {receipt_num}: {uscis_data['error']}")
-            raise HTTPException(
-                status_code=400, 
-                detail=f"USCIS Sandbox check failed: {uscis_data['error']}. Verify credentials or receipt number."
-            )
-    else:
-        # Sandbox API returns values like: formType, submittedDate, modifiedDate, current_case_status_text_en
-        # nested within the "case_status" key. Ensure they map properly.
-        case_status_data = uscis_data.get("case_status", {})
-        form_type = case_status_data.get("formType", request.form_type)
-        status_text = case_status_data.get("current_case_status_text_en", "Case Was Received")
-        submitted_date_str = case_status_data.get("submittedDate", request.filed_date)
-        modified_date_str = case_status_data.get("modifiedDate")
+    if not uscis_data.get("success"):
+        # Genuine API connection/authentication or bad request errors (e.g. 401, 422) should still fail
+        raise HTTPException(
+            status_code=uscis_data.get("http_status", 400), 
+            detail=f"USCIS Sandbox check failed: {uscis_data.get('error_message', 'API Error')}. Verify credentials or receipt number."
+        )
+    
+    # Sandbox API returns values like: formType, submittedDate, modifiedDate, current_case_status_text_en
+    # nested within the "case_status" key. Ensure they map properly.
+    case_status_data = uscis_data.get("raw_response", {}).get("case_status", {})
+    if not case_status_data:
+        case_status_data = uscis_data
+    form_type = case_status_data.get("formType") or request.form_type
+    status_text = uscis_data.get("current_status", "Case Was Received")
+    submitted_date_str = case_status_data.get("submittedDate") or request.filed_date
+    modified_date_str = case_status_data.get("modifiedDate")
 
-        submitted_date = parse_date(submitted_date_str)
-        modified_date = parse_date(modified_date_str)
+    submitted_date = parse_date(submitted_date_str) if submitted_date_str else None
+    modified_date = parse_date(modified_date_str) if modified_date_str else None
 
-        # Determine milestones and completion status
-        status_lower = status_text.lower()
-        is_completed = "approved" in status_lower or "denied" in status_lower
-        completed_date = modified_date if is_completed else None
+    # Determine milestones and completion status
+    status_lower = status_text.lower()
+    is_completed = "approved" in status_lower or "denied" in status_lower
+    completed_date = modified_date if is_completed else None
 
     # 2. Upsert Case to Supabase
     case_record = {
         "user_id": user_id,
-        "form_type": form_type,
         "receipt_number": receipt_num,
-        "service_center": request.service_center,
-        "filed_date": str(submitted_date or request.filed_date),
+        "receipt_prefix": prefix,
+        "receipt_number_last4": receipt_num[-4:],
+        "form_type": form_type or "Unknown",
+        "service_center": service_center,
+        "filed_date": str(submitted_date) if submitted_date else None,
         "current_status": status_text,
         "last_sync_date": "now()",
         "completed_date": str(completed_date) if completed_date else None,
         "concurrent_filing": request.concurrent_filing,
         "premium_processed": request.premium_processed,
-        "country_code": request.country_code or "ROW"
+        "country_code": request.country_code or "ROW",
+        "is_completed": is_completed,
+        "data_source": "uscis_sandbox",
+        "data_confidence": "Sandbox"
     }
 
     try:
-        case_response = supabase.table("cases").upsert(
-            case_record,
-            on_conflict="receipt_number"
-        ).execute()
+        try:
+            case_response = supabase.table("cases").upsert(
+                case_record,
+                on_conflict="receipt_number"
+            ).execute()
+        except Exception as db_err:
+            logger.warning(f"Extended upsert failed in sync_case, falling back to original schema: {str(db_err)}")
+            fallback_record = {
+                "user_id": user_id,
+                "form_type": form_type or "Unknown",
+                "receipt_number": receipt_num,
+                "service_center": service_center,
+                "filed_date": str(submitted_date) if submitted_date else "1970-01-01",
+                "current_status": status_text,
+                "last_sync_date": "now()",
+                "completed_date": str(completed_date) if completed_date else None,
+                "concurrent_filing": request.concurrent_filing,
+                "premium_processed": request.premium_processed,
+                "country_code": request.country_code or "ROW"
+            }
+            case_response = supabase.table("cases").upsert(
+                fallback_record,
+                on_conflict="receipt_number"
+            ).execute()
 
         if not case_response.data:
             raise HTTPException(status_code=500, detail="Failed to write case to database.")
@@ -175,33 +591,50 @@ async def sync_case(request: CaseSyncRequest):
         case_id = case_response.data[0]["id"]
 
         # 3. Create milestones
-        # Milestone A: RECEIVED (created when filed)
-        supabase.table("milestones").upsert({
-            "case_id": case_id,
-            "milestone_type": "RECEIVED",
-            "event_date": str(submitted_date or request.filed_date)
-        }, on_conflict="case_id,milestone_type").execute()
+        try:
+            if submitted_date or request.filed_date:
+                supabase.table("milestones").upsert({
+                    "case_id": case_id,
+                    "milestone_type": "RECEIVED",
+                    "event_date": str(submitted_date or request.filed_date)
+                }, on_conflict="case_id,milestone_type").execute()
 
-        # Milestone B: CURRENT status update
-        if is_completed:
-            milestone_type = "APPROVED" if "approved" in status_lower else "DENIED"
-            supabase.table("milestones").upsert({
+            if is_completed:
+                milestone_type = "APPROVED" if "approved" in status_lower else "DENIED"
+                supabase.table("milestones").upsert({
+                    "case_id": case_id,
+                    "milestone_type": milestone_type,
+                    "event_date": str(completed_date or "now()")
+                }, on_conflict="case_id,milestone_type").execute()
+            elif "rfe" in status_lower:
+                supabase.table("milestones").upsert({
+                    "case_id": case_id,
+                    "milestone_type": "RFE_SENT",
+                    "event_date": str(modified_date or "now()")
+                }, on_conflict="case_id,milestone_type").execute()
+            elif "biometrics" in status_lower:
+                supabase.table("milestones").upsert({
+                    "case_id": case_id,
+                    "milestone_type": "BIOMETRICS",
+                    "event_date": str(modified_date or "now()")
+                }, on_conflict="case_id,milestone_type").execute()
+        except Exception as m_err:
+            logger.warning(f"Milestones upsert failed: {str(m_err)}")
+
+        try:
+            supabase.table("case_status_snapshots").insert({
                 "case_id": case_id,
-                "milestone_type": milestone_type,
-                "event_date": str(completed_date)
-            }, on_conflict="case_id,milestone_type").execute()
-        elif "rfe" in status_lower:
-            supabase.table("milestones").upsert({
-                "case_id": case_id,
-                "milestone_type": "RFE_SENT",
-                "event_date": str(modified_date or "now()")
-            }, on_conflict="case_id,milestone_type").execute()
-        elif "biometrics" in status_lower:
-            supabase.table("milestones").upsert({
-                "case_id": case_id,
-                "milestone_type": "BIOMETRICS",
-                "event_date": str(modified_date or "now()")
-            }, on_conflict="case_id,milestone_type").execute()
+                "receipt_prefix": prefix,
+                "receipt_number_last4": receipt_num[-4:],
+                "status_text": status_text,
+                "status_date": submitted_date,
+                "http_status": 200,
+                "success": True,
+                "source": "uscis_sandbox",
+                "raw_response": uscis_data.get("raw_response", {})
+            }).execute()
+        except Exception as snap_err:
+            logger.warning(f"Snapshot insert failed: {str(snap_err)}")
 
         # Fetch the complete case with milestones
         full_case_response = supabase.table("cases")\
@@ -212,7 +645,6 @@ async def sync_case(request: CaseSyncRequest):
         if not full_case_response.data:
             raise HTTPException(status_code=500, detail="Failed to retrieve complete case data.")
 
-        # Return updated case info
         return {
             "success": True,
             "case": full_case_response.data[0]

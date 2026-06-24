@@ -20,8 +20,25 @@ import {
 import html2canvas from 'html2canvas';
 import { COUNTRY_MAP as COUNTRY_METADATA } from './countries';
 
+// Import our new components
+import SandboxModeBanner from './components/SandboxModeBanner';
+import DataConfidenceBadge from './components/DataConfidenceBadge';
+import MissingDataPrompt from './components/MissingDataPrompt';
+import ReceiptLookup from './components/ReceiptLookup';
+import CaseSummaryCard from './components/CaseSummaryCard';
+import CaseStatusPanel from './components/CaseStatusPanel';
+import TimelinePanel from './components/TimelinePanel';
+import ForecastPanel from './components/ForecastPanel';
+import ImportJsonPanel from './components/ImportJsonPanel';
+import ApiTrafficPanel from './components/ApiTrafficPanel';
+
+// Import API client functions
+import * as api from './api/client';
+import { validateReceiptNumber, normalizeReceiptNumber, inferServiceCenter } from './utils/receipt';
+
 // Setup environment URLs (FastAPI backend)
-const BACKEND_URL = 'http://127.0.0.1:8000';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
+
 
 // Mock Data for instant premium visualization in Demo Mode
 const MOCK_CASES = [
@@ -670,95 +687,59 @@ export default function App() {
     }
   }, [compareServiceCenter, selectedCase, isDemoMode]);
 
-  const handleSyncCase = async (e) => {
-    e.preventDefault();
-    if (!receiptNumber) {
-      setErrorMsg('Please fill in the Receipt Number.');
-      return;
-    }
-
-    const finalFiledDate = filedDate || new Date().toISOString().split('T')[0];
-
+  const handleSaveCase = async (caseDetails) => {
     setErrorMsg('');
     setSuccessMsg('');
     setIsSyncing(true);
 
     if (isDemoMode) {
-      // Simulate Sandbox API Response delay
       setTimeout(() => {
         const newId = `case-${Date.now()}`;
         const newCase = {
           id: newId,
-          form_type: formType,
-          receipt_number: receiptNumber.toUpperCase(),
-          service_center: serviceCenter,
-          filed_date: finalFiledDate,
+          form_type: caseDetails.form_type,
+          receipt_number: caseDetails.receipt_number.toUpperCase(),
+          service_center: caseDetails.service_center,
+          filed_date: caseDetails.filed_date || null,
           current_status: 'Case Was Received',
           completed_date: null,
           last_sync_date: new Date().toISOString(),
-          concurrent_filing: concurrentFiling,
-          premium_processed: premiumProcessed,
-          country_code: countryCode,
-          milestones: [
-            { milestone_type: 'RECEIVED', event_date: finalFiledDate }
-          ]
+          concurrent_filing: caseDetails.concurrent_filing,
+          premium_processed: caseDetails.premium_processed,
+          country_code: caseDetails.country_code,
+          milestones: caseDetails.filed_date ? [
+            { milestone_type: 'RECEIVED', event_date: caseDetails.filed_date }
+          ] : []
         };
 
         setCases([newCase, ...cases]);
         setSelectedCaseId(newId);
-        setReceiptNumber('');
-        setConcurrentFiling(false);
-        setPremiumProcessed(false);
-        setCountryCode('ROW');
         setSuccessMsg(`Successfully synced mock Sandbox receipt ${newCase.receipt_number}!`);
         notifyUser('USCIS Update', `Mock case ${newCase.receipt_number} synced. Status: ${newCase.current_status}`);
         setIsSyncing(false);
       }, 1500);
     } else {
-      // Call FastAPI backend /api/cases/sync
       try {
-        const response = await fetch(`${BACKEND_URL}/api/cases/sync`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            receipt_number: receiptNumber.toUpperCase(),
-            user_id: 'dev_user_1', // Single-user profile sandbox mode
-            form_type: formType,
-            service_center: serviceCenter,
-            filed_date: finalFiledDate,
-            concurrent_filing: concurrentFiling,
-            premium_processed: premiumProcessed,
-            country_code: countryCode
-          })
+        const data = await api.saveCase({
+          receipt_number: caseDetails.receipt_number.toUpperCase(),
+          user_id: 'dev_user_1',
+          form_type: caseDetails.form_type,
+          service_center: caseDetails.service_center,
+          filed_date: caseDetails.filed_date || null,
+          concurrent_filing: caseDetails.concurrent_filing,
+          premium_processed: caseDetails.premium_processed,
+          country_code: caseDetails.country_code
         });
 
-        const data = await response.json();
-        
-        if (!response.ok) {
-          throw new Error(data.detail || 'Sync failed.');
-        }
-
-        // Format case milestones for UI
         const fetchedCase = data.case;
-        
-        // Fetch fresh list of cases from DB (in real app, we'd query API. Here we just update local state)
-        // Let's add it or replace it in local cases state
         const updatedCases = cases.filter(c => c.receipt_number !== fetchedCase.receipt_number);
         setCases([fetchedCase, ...updatedCases]);
         setSelectedCaseId(fetchedCase.id);
         
-        setReceiptNumber('');
-        setConcurrentFiling(false);
-        setPremiumProcessed(false);
-        setCountryCode('ROW');
         setSuccessMsg(`Successfully connected to USCIS Sandbox. Sync complete!`);
         notifyUser('USCIS Update', `Case ${fetchedCase.receipt_number} synced. Status: ${fetchedCase.current_status}`);
         
-        // Trigger background recalculation in case database changes
-        fetch(`${BACKEND_URL}/api/analytics/trigger`, { method: 'POST' }).catch(() => {});
-        
+        api.triggerAnalytics().catch(() => {});
       } catch (err) {
         setErrorMsg(err.message || 'API Connection refused. Ensure FastAPI server is running.');
       } finally {
@@ -767,40 +748,68 @@ export default function App() {
     }
   };
 
-  const handleImportDetailedCase = async (e) => {
-    e.preventDefault();
-    if (!rawJsonText.trim()) {
-      setErrorMsg('Please paste the raw JSON text from my.uscis.gov.');
-      return;
-    }
+  const handleUpdateCaseDetails = async (updatedCase) => {
+    setErrorMsg('');
+    setSuccessMsg('');
+    setIsSyncing(true);
 
-    let parsedPayload;
-    try {
-      parsedPayload = JSON.parse(rawJsonText.trim());
-    } catch {
-      setErrorMsg('Invalid JSON format. Please paste a valid JSON document.');
-      return;
-    }
+    if (isDemoMode) {
+      const updated = cases.map(c => c.id === updatedCase.id ? {
+        ...c,
+        ...updatedCase,
+        milestones: updatedCase.filed_date ? [
+          ...c.milestones.filter(m => m.milestone_type !== 'RECEIVED'),
+          { milestone_type: 'RECEIVED', event_date: updatedCase.filed_date }
+        ] : c.milestones.filter(m => m.milestone_type !== 'RECEIVED')
+      } : c);
+      setCases(updated);
+      setSuccessMsg(`Successfully updated case details!`);
+      setIsSyncing(false);
+    } else {
+      try {
+        const data = await api.saveCase({
+          receipt_number: updatedCase.receipt_number,
+          user_id: updatedCase.user_id || 'dev_user_1',
+          form_type: updatedCase.form_type,
+          service_center: updatedCase.service_center,
+          filed_date: updatedCase.filed_date || null,
+          concurrent_filing: updatedCase.concurrent_filing,
+          premium_processed: updatedCase.premium_processed,
+          country_code: updatedCase.country_code
+        });
 
+        const fetchedCase = data.case;
+        const updatedCases = cases.map(c => c.id === fetchedCase.id ? fetchedCase : c);
+        setCases(updatedCases);
+        setSuccessMsg(`Successfully updated case details!`);
+        api.triggerAnalytics().catch(() => {});
+      } catch (err) {
+        setErrorMsg(err.message || 'Failed to update case.');
+      } finally {
+        setIsSyncing(false);
+      }
+    }
+  };
+
+  const handleImportCase = async (importData) => {
+    const { service_center, payload } = importData;
     setErrorMsg('');
     setSuccessMsg('');
     setIsSyncing(true);
 
     if (isDemoMode) {
       setTimeout(() => {
-        const dataObj = parsedPayload.data || parsedPayload;
+        const dataObj = payload.data || payload;
         const receipt = dataObj.receiptNumber || dataObj.receipt_number || `IOE${Date.now()}`;
         const fType = dataObj.formType || dataObj.form_type || 'I-485';
-        const sDate = dataObj.submissionDate || dataObj.submittedDate || dataObj.receiptDate || new Date().toISOString().split('T')[0];
+        const sDate = dataObj.submissionDate || dataObj.submittedDate || dataObj.receiptDate || null;
         const newId = `case-${Date.now()}`;
         
-        // We collect milestone event dates into a map to deduplicate by milestone_type
         const milestoneMap = {};
+        if (sDate) {
+          milestoneMap["RECEIVED"] = sDate;
+        }
         
-        // 1. RECEIVED
-        milestoneMap["RECEIVED"] = sDate;
-        
-        // 2. evidenceRequests
         const evidenceReqs = dataObj.evidenceRequests || [];
         evidenceReqs.forEach(req => {
           const actionType = req.actionType;
@@ -817,7 +826,6 @@ export default function App() {
           }
         });
         
-        // 3. notices
         const notices = dataObj.notices || [];
         notices.forEach(n => {
           if (n.actionType === "Appointment Scheduled") {
@@ -828,7 +836,6 @@ export default function App() {
           }
         });
         
-        // 4. events
         const events = dataObj.events || [];
         events.forEach(e => {
           const code = e.eventCode;
@@ -847,7 +854,6 @@ export default function App() {
           }
         });
         
-        // 5. history
         const history = dataObj.caseHistory || dataObj.caseActions || dataObj.history || [];
         history.forEach(item => {
           const actionDate = item.date || item.actionDate;
@@ -871,13 +877,11 @@ export default function App() {
           }
         });
         
-        // Convert map to milestones array
         const milestones = Object.keys(milestoneMap).map(type => ({
           milestone_type: type,
           event_date: milestoneMap[type]
         }));
         
-        // Deduce current status
         const caseStatusObj = dataObj.caseStatus || {};
         let statusText = caseStatusObj.statusText || dataObj.current_case_status_text_en || dataObj.status || "Unknown";
         
@@ -907,7 +911,7 @@ export default function App() {
           id: newId,
           form_type: fType,
           receipt_number: receipt.toUpperCase(),
-          service_center: serviceCenter,
+          service_center: service_center,
           filed_date: sDate,
           current_status: statusText,
           completed_date: completedDate,
@@ -917,42 +921,21 @@ export default function App() {
 
         setCases([newCase, ...cases]);
         setSelectedCaseId(newId);
-        setRawJsonText('');
         setSuccessMsg(`Successfully imported mock case ${newCase.receipt_number}!`);
         notifyUser('USCIS Import', `Mock case ${newCase.receipt_number} imported successfully.`);
         setIsSyncing(false);
       }, 1500);
     } else {
       try {
-        const response = await fetch(`${BACKEND_URL}/api/cases/import-detailed`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            user_id: 'dev_user_1',
-            service_center: serviceCenter,
-            payload: parsedPayload
-          })
-        });
-
-        const data = await response.json();
-        
-        if (!response.ok) {
-          throw new Error(data.detail || 'Import failed.');
-        }
-
+        const data = await api.importDetailedCase('dev_user_1', service_center, payload);
         const fetchedCase = data.case;
         const updatedCases = cases.filter(c => c.receipt_number !== fetchedCase.receipt_number);
         setCases([fetchedCase, ...updatedCases]);
         setSelectedCaseId(fetchedCase.id);
         
-        setRawJsonText('');
         setSuccessMsg(`Successfully imported case ${fetchedCase.receipt_number} from my.uscis.gov JSON!`);
         notifyUser('USCIS Import', `Case ${fetchedCase.receipt_number} imported. Status: ${fetchedCase.current_status}`);
-        
-        fetch(`${BACKEND_URL}/api/analytics/trigger`, { method: 'POST' }).catch(() => {});
-        
+        api.triggerAnalytics().catch(() => {});
       } catch (err) {
         setErrorMsg(err.message || 'API Connection refused. Ensure FastAPI server is running.');
       } finally {
@@ -961,50 +944,36 @@ export default function App() {
     }
   };
 
-  // Handle manual case refresh/sync
-  const handleRefreshCase = async (caseToSync) => {
-    if (!caseToSync) return;
-    
+  const handleRefreshCase = async (caseIdOrObj) => {
     setIsSyncing(true);
     setErrorMsg('');
     setSuccessMsg('');
 
+    const targetCase = typeof caseIdOrObj === 'string'
+      ? cases.find(c => c.id === caseIdOrObj)
+      : caseIdOrObj;
+
+    if (!targetCase) {
+      setErrorMsg('Case not found.');
+      setIsSyncing(false);
+      return;
+    }
+
     if (isDemoMode) {
-      // Simulation for mock refresh
       setTimeout(() => {
-        setSuccessMsg(`Mock Sandbox sync completed for ${caseToSync.receipt_number}!`);
+        setSuccessMsg(`Mock Sandbox sync completed for ${targetCase.receipt_number}!`);
         setIsSyncing(false);
       }, 1000);
     } else {
       try {
-        const response = await fetch(`${BACKEND_URL}/api/cases/sync`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            receipt_number: caseToSync.receipt_number,
-            user_id: caseToSync.user_id || 'dev_user_1',
-            form_type: caseToSync.form_type,
-            service_center: caseToSync.service_center,
-            filed_date: caseToSync.filed_date
-          })
-        });
-
-        const data = await response.json();
-        if (!response.ok) {
-          throw new Error(data.detail || 'Sync failed.');
-        }
-
+        const data = await api.refreshCase(targetCase.id);
         const syncedCase = data.case;
-        // Replace matching case in state
         const updatedCases = cases.map(c => c.id === syncedCase.id ? syncedCase : c);
         setCases(updatedCases);
         setSuccessMsg(`Successfully synced Sandbox receipt ${syncedCase.receipt_number}!`);
         notifyUser('USCIS Update', `Case ${syncedCase.receipt_number} refreshed. Status: ${syncedCase.current_status}`);
         
-        // Trigger background recalculation
-        fetch(`${BACKEND_URL}/api/analytics/trigger`, { method: 'POST' }).catch(() => {});
+        api.triggerAnalytics().catch(() => {});
       } catch (err) {
         setErrorMsg(err.message || 'API Connection error refreshing case.');
       } finally {
@@ -2357,6 +2326,8 @@ export default function App() {
         </div>
       </header>
 
+      <SandboxModeBanner isDemoMode={isDemoMode} />
+
       {/* Main Grid Workspace */}
       {activeView === 'tracker' ? (
         <div className="dashboard-grid">
@@ -2364,20 +2335,17 @@ export default function App() {
         {/* LEFT COLUMN: Input Form & Case Selector */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
           
-          {/* Sync Case Form */}
-          <div className="glass-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', borderBottom: '1px solid var(--border-card)', paddingBottom: '0.8rem' }}>
-              <h2 className="card-title" style={{ marginBottom: 0 }}>
-                <PlusCircle size={20} className="text-primary" />
-                Case Integration
-              </h2>
+          {/* Case Integration tabs */}
+          <div className="glass-card" style={{ padding: 0, border: 'none', background: 'none' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-card)', borderRadius: '8px', padding: '0.6rem 1rem' }}>
+              <span style={{ fontSize: '0.9rem', fontWeight: '600', color: 'var(--text-primary)' }}>Integration Method</span>
               <div className="tab-nav" style={{ margin: 0, padding: '0.2rem' }}>
                 <button 
                   className={`tab-btn ${syncTab === 'sandbox' ? 'active' : ''}`}
                   onClick={() => { setSyncTab('sandbox'); setSuccessMsg(''); setErrorMsg(''); }}
                   style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
                 >
-                  Sandbox Sync
+                  USCIS Lookup
                 </button>
                 <button 
                   className={`tab-btn ${syncTab === 'import' ? 'active' : ''}`}
@@ -2390,187 +2358,20 @@ export default function App() {
             </div>
             
             {syncTab === 'sandbox' ? (
-              <form onSubmit={handleSyncCase}>
-                <div className="form-group">
-                  <label>Visa Form Type</label>
-                  <select 
-                    className="form-select" 
-                    value={formType} 
-                    onChange={(e) => setFormType(e.target.value)}
-                  >
-                    <option value="I-485">I-485 (Adjustment of Status)</option>
-                    <option value="I-130">I-130 (Petition for Alien Relative)</option>
-                    <option value="I-765">I-765 (Employment Authorization)</option>
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label>Receipt Number (Sandbox Test Key)</label>
-                  <input 
-                    type="text" 
-                    className="form-input" 
-                    placeholder="e.g. MSC2690189472" 
-                    value={receiptNumber} 
-                    onChange={(e) => setReceiptNumber(e.target.value)} 
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Service Center</label>
-                  <select 
-                    className="form-select" 
-                    value={serviceCenter} 
-                    onChange={(e) => setServiceCenter(e.target.value)}
-                  >
-                    <option value="National Benefits Center">National Benefits Center</option>
-                    <option value="Texas Service Center">Texas Service Center</option>
-                    <option value="California Service Center">California Service Center</option>
-                    <option value="Nebraska Service Center">Nebraska Service Center</option>
-                  </select>
-                </div>
-
-                <div className="form-group">
-                  <label>Filing Receipt Date</label>
-                  <input 
-                    type="date" 
-                    className="form-input" 
-                    value={filedDate} 
-                    onChange={(e) => setFiledDate(e.target.value)} 
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Country of Birth (Chargeability)</label>
-                  <select 
-                    className="form-select" 
-                    value={countryCode} 
-                    onChange={(e) => setCountryCode(e.target.value)}
-                  >
-                    <option value="ROW">Rest of World (ROW)</option>
-                    <option value="IN">India (IN)</option>
-                    <option value="CN">China (CN)</option>
-                    <option value="MX">Mexico (MX)</option>
-                    <option value="PH">Philippines (PH)</option>
-                  </select>
-                </div>
-
-                <div style={{ display: 'flex', gap: '1.5rem', marginBottom: '1.2rem', marginTop: '0.5rem' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-primary)' }}>
-                    <input 
-                      type="checkbox" 
-                      checked={concurrentFiling} 
-                      onChange={(e) => setConcurrentFiling(e.target.checked)} 
-                      style={{ width: '16px', height: '16px', accentColor: 'var(--primary)' }}
-                    />
-                    Concurrent Filing
-                  </label>
-
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-primary)' }}>
-                    <input 
-                      type="checkbox" 
-                      checked={premiumProcessed} 
-                      onChange={(e) => setPremiumProcessed(e.target.checked)} 
-                      style={{ width: '16px', height: '16px', accentColor: 'var(--primary)' }}
-                    />
-                    Premium Processing
-                  </label>
-                </div>
-
-                {errorMsg && (
-                  <div style={{ display: 'flex', gap: '0.4rem', color: 'var(--status-denied)', fontSize: '0.85rem', marginBottom: '1rem', alignItems: 'center' }}>
-                    <AlertCircle size={14} />
-                    <span>{errorMsg}</span>
-                  </div>
-                )}
-
-                {successMsg && (
-                  <div style={{ display: 'flex', gap: '0.4rem', color: 'var(--status-approved)', fontSize: '0.85rem', marginBottom: '1rem', alignItems: 'center' }}>
-                    <CheckCircle2 size={14} />
-                    <span>{successMsg}</span>
-                  </div>
-                )}
-
-                <button 
-                  type="submit" 
-                  className="btn btn-primary" 
-                  disabled={isSyncing}
-                >
-                  {isSyncing ? (
-                    <>
-                      <RefreshCw size={16} className="spin" style={{ animation: 'spin 1.5s linear infinite' }} />
-                      Syncing Sandbox API...
-                    </>
-                  ) : (
-                    <>
-                      <RefreshCw size={16} />
-                      Sync Case Milestones
-                    </>
-                  )}
-                </button>
-              </form>
+              <ReceiptLookup
+                onSave={handleSaveCase}
+                isSyncing={isSyncing}
+                errorMsg={errorMsg}
+                successMsg={successMsg}
+                isDemoMode={isDemoMode}
+              />
             ) : (
-              <form onSubmit={handleImportDetailedCase}>
-                <div className="form-group">
-                  <label>Service Center (Processing Location)</label>
-                  <select 
-                    className="form-select" 
-                    value={serviceCenter} 
-                    onChange={(e) => setServiceCenter(e.target.value)}
-                  >
-                    <option value="National Benefits Center">National Benefits Center</option>
-                    <option value="Texas Service Center">Texas Service Center</option>
-                    <option value="California Service Center">California Service Center</option>
-                    <option value="Nebraska Service Center">Nebraska Service Center</option>
-                  </select>
-                  <small style={{ color: 'var(--text-secondary)', fontSize: '0.75rem', marginTop: '0.3rem', display: 'block' }}>
-                    my.uscis.gov JSON does not specify your processing office; please select it manually.
-                  </small>
-                </div>
-
-                <div className="form-group">
-                  <label>my.uscis.gov Raw Case JSON</label>
-                  <textarea 
-                    className="form-input" 
-                    rows="8"
-                    placeholder='Paste raw JSON starting with {"data": ...} or {"receiptNumber": ...}'
-                    style={{ fontFamily: 'monospace', fontSize: '0.8rem', resize: 'vertical', width: '100%', boxSizing: 'border-box' }}
-                    value={rawJsonText} 
-                    onChange={(e) => setRawJsonText(e.target.value)} 
-                  />
-                </div>
-
-                {errorMsg && (
-                  <div style={{ display: 'flex', gap: '0.4rem', color: 'var(--status-denied)', fontSize: '0.85rem', marginBottom: '1rem', alignItems: 'center' }}>
-                    <AlertCircle size={14} />
-                    <span>{errorMsg}</span>
-                  </div>
-                )}
-
-                {successMsg && (
-                  <div style={{ display: 'flex', gap: '0.4rem', color: 'var(--status-approved)', fontSize: '0.85rem', marginBottom: '1rem', alignItems: 'center' }}>
-                    <CheckCircle2 size={14} />
-                    <span>{successMsg}</span>
-                  </div>
-                )}
-
-                <button 
-                  type="submit" 
-                  className="btn btn-primary" 
-                  disabled={isSyncing}
-                >
-                  {isSyncing ? (
-                    <>
-                      <RefreshCw size={16} className="spin" style={{ animation: 'spin 1.5s linear infinite' }} />
-                      Importing Case JSON...
-                    </>
-                  ) : (
-                    <>
-                      <PlusCircle size={16} />
-                      Import Detailed Case History
-                    </>
-                  )}
-                </button>
-              </form>
+              <ImportJsonPanel
+                onImport={handleImportCase}
+                isSyncing={isSyncing}
+                errorMsg={errorMsg}
+                successMsg={successMsg}
+              />
             )}
           </div>
 
@@ -2658,110 +2459,91 @@ export default function App() {
               ))}
             </div>
           </div>
-
         </div>
 
-        {/* RIGHT COLUMN: Statistics Dashboard & Predictor Curves */}
+         {/* RIGHT COLUMN: Statistics Dashboard & Predictor Curves */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
           
-          {/* Main Predictor & Statistical Percentiles */}
-          <div className="glass-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-              <h2 className="card-title" style={{ marginBottom: 0 }}>
-                <TrendingUp size={20} style={{ color: 'var(--accent)' }} />
-                Immigration Forecasting Model
-              </h2>
-              
-              {/* Tab Selector */}
-              <div className="tab-nav" style={{ margin: 0, padding: '0.2rem' }}>
-                <button 
-                  className={`tab-btn ${activeTab === 'timeline' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('timeline')}
-                  style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
-                >
-                  Timelines
-                </button>
-                <button 
-                  className={`tab-btn ${activeTab === 'predictions' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('predictions')}
-                  style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
-                >
-                  Approval Probability
-                </button>
-                <button 
-                  className={`tab-btn ${activeTab === 'queue' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('queue')}
-                  style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
-                >
-                  Queue Standings
-                </button>
-                <button 
-                  className={`tab-btn ${activeTab === 'trends' ? 'active' : ''}`}
-                  onClick={() => setActiveTab('trends')}
-                  style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
-                >
-                  Trends Heatmap
-                </button>
+          {selectedCase ? (
+            <>
+              {/* Case Details cards */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '0.5rem' }}>
+                <CaseSummaryCard caseData={selectedCase} onUpdateCase={handleUpdateCaseDetails} />
+                <CaseStatusPanel caseData={selectedCase} onRefresh={handleRefreshCase} isSyncing={isSyncing} />
               </div>
-            </div>
 
-            {selectedCase ? (
-              <>
-                {/* Visual Metadata banner */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-card)', paddingBottom: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
-                  <div>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Filing Category</span>
-                    <h3 style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-heading)' }}>{selectedCase.form_type}</h3>
+              {/* Main Predictor & Statistical Percentiles */}
+              <div className="glass-card">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                  <h2 className="card-title" style={{ marginBottom: 0 }}>
+                    <TrendingUp size={20} style={{ color: 'var(--accent)' }} />
+                    Immigration Forecasting Model
+                  </h2>
+                  
+                  {/* Tab Selector */}
+                  <div className="tab-nav" style={{ margin: 0, padding: '0.2rem' }}>
+                    <button 
+                      className={`tab-btn ${activeTab === 'timeline' ? 'active' : ''}`}
+                      onClick={() => setActiveTab('timeline')}
+                      style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+                    >
+                      Timelines
+                    </button>
+                    <button 
+                      className={`tab-btn ${activeTab === 'predictions' ? 'active' : ''}`}
+                      onClick={() => setActiveTab('predictions')}
+                      style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+                    >
+                      Approval Probability
+                    </button>
+                    <button 
+                      className={`tab-btn ${activeTab === 'queue' ? 'active' : ''}`}
+                      onClick={() => setActiveTab('queue')}
+                      style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+                    >
+                      Queue Standings
+                    </button>
+                    <button 
+                      className={`tab-btn ${activeTab === 'trends' ? 'active' : ''}`}
+                      onClick={() => setActiveTab('trends')}
+                      style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+                    >
+                      Trends Heatmap
+                    </button>
+                    <button 
+                      className={`tab-btn ${activeTab === 'traffic' ? 'active' : ''}`}
+                      onClick={() => setActiveTab('traffic')}
+                      style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+                    >
+                      API Traffic
+                    </button>
                   </div>
-                  <div>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Filing Date</span>
-                    <h3 style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-heading)' }}>{selectedCase.filed_date}</h3>
-                  </div>
-                  <div>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Office Location</span>
-                    <h3 style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-heading)' }}>{selectedCase.service_center}</h3>
-                  </div>
-                  <div>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Compare with Center</span>
-                    <div style={{ marginTop: '0.2rem' }}>
-                      <select 
-                        className="form-select" 
-                        style={{ padding: '0.3rem 0.5rem', fontSize: '0.8rem', width: 'auto', background: 'rgba(31, 41, 55, 0.6)' }}
-                        value={compareServiceCenter}
-                        onChange={(e) => setCompareServiceCenter(e.target.value)}
-                      >
-                        <option value="">None (Single Center)</option>
-                        <option value="National Benefits Center">National Benefits Center</option>
-                        <option value="Texas Service Center">Texas Service Center</option>
-                        <option value="California Service Center">California Service Center</option>
-                        <option value="Nebraska Service Center">Nebraska Service Center</option>
-                      </select>
+                </div>
+
+                {/* Selected Case Covariates Status Card (Only if we have filing date for gauge calculation) */}
+                {selectedCase.filed_date && selectedCase.filed_date !== '1970-01-01' && (
+                  <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', padding: '0.6rem 1rem', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)', marginBottom: '1.5rem', fontSize: '0.85rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                      <span style={{ color: 'var(--text-muted)' }}>Country of Birth:</span>
+                      <strong style={{ color: 'var(--text-primary)' }}>{selectedCase.country_code || 'ROW'}</strong>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', marginLeft: '1rem' }}>
+                      <span style={{ color: 'var(--text-muted)' }}>Concurrent Filing:</span>
+                      <strong style={{ color: selectedCase.concurrent_filing ? 'var(--status-approved)' : 'var(--text-muted)' }}>
+                        {selectedCase.concurrent_filing ? 'Yes' : 'No'}
+                      </strong>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', marginLeft: '1rem' }}>
+                      <span style={{ color: 'var(--text-muted)' }}>Premium Processing:</span>
+                      <strong style={{ color: selectedCase.premium_processed ? 'var(--status-approved)' : 'var(--text-muted)' }}>
+                        {selectedCase.premium_processed ? 'Yes' : 'No'}
+                      </strong>
                     </div>
                   </div>
-                </div>
+                )}
 
-                {/* Selected Case Covariates Status Card */}
-                <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', padding: '0.6rem 1rem', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)', marginBottom: '1.5rem', fontSize: '0.85rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Country of Birth:</span>
-                    <strong style={{ color: 'var(--text-primary)' }}>{selectedCase.country_code || 'ROW'}</strong>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', marginLeft: '1rem' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Concurrent Filing:</span>
-                    <strong style={{ color: selectedCase.concurrent_filing ? 'var(--status-approved)' : 'var(--text-muted)' }}>
-                      {selectedCase.concurrent_filing ? 'Yes' : 'No'}
-                    </strong>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', marginLeft: '1rem' }}>
-                    <span style={{ color: 'var(--text-muted)' }}>Premium Processing:</span>
-                    <strong style={{ color: selectedCase.premium_processed ? 'var(--status-approved)' : 'var(--text-muted)' }}>
-                      {selectedCase.premium_processed ? 'Yes' : 'No'}
-                    </strong>
-                  </div>
-                </div>
-
-                {/* How I Compare Wait Time Gauge */}
-                {predictionData && (
+                {/* How I Compare Wait Time Gauge (only if filing date is set and cohort data is sufficient) */}
+                {predictionData && selectedCase.filed_date && selectedCase.filed_date !== '1970-01-01' && (isDemoMode || (predictionData.sample_size || 0) >= 30) && (
                   <div className="compare-gauge-card" style={{ marginBottom: '1.5rem', background: 'rgba(31, 41, 55, 0.25)', border: '1px solid var(--border-card)', borderRadius: '12px', padding: '1.2rem' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.8rem' }}>
                       <span style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
@@ -2841,115 +2623,51 @@ export default function App() {
                   </div>
                 )}
 
-
-                {/* Sub-Panel: Survival Curve View */}
+                {/* Sub-Panel: Tab Contents */}
                 {activeTab === 'predictions' ? (
-                  <div>
-                    {(() => {
-                      const mainCurve = getAdjustedCurve(predictionData, selectedCase) || (predictionData?.survival_curve_json || []);
-                      const adjustedMedian = getPercentileDays(mainCurve, 0.50) || predictionData?.median_wait_days;
-                      const adjustedP25 = getPercentileDays(mainCurve, 0.25) || predictionData?.p25_wait_days;
-                      const adjustedP75 = getPercentileDays(mainCurve, 0.75) || predictionData?.p75_wait_days;
-                      const adjustedP90 = getPercentileDays(mainCurve, 0.90) || predictionData?.p90_wait_days;
-                      
-                      return (
-                        <div className="stats-grid">
-                          <div className="stat-tile">
-                            <div className="stat-value">{adjustedMedian ? `${adjustedMedian}d` : '--'}</div>
-                            <div className="stat-label">Median Wait (50%)</div>
-                          </div>
-                          <div className="stat-tile">
-                            <div className="stat-value">{adjustedP25 ? `${adjustedP25}d` : '--'}</div>
-                            <div className="stat-label">Fast Track (25%)</div>
-                          </div>
-                          <div className="stat-tile">
-                            <div className="stat-value">{adjustedP75 ? `${adjustedP75}d` : '--'}</div>
-                            <div className="stat-label">Moderate Delay (75%)</div>
-                          </div>
-                          <div className="stat-tile">
-                            <div className="stat-value">{adjustedP90 ? `${adjustedP90}d` : '--'}</div>
-                            <div className="stat-label">Severe Delay (90%)</div>
-                          </div>
-                        </div>
-                      );
-                    })()}
-
-                    <div style={{ padding: '0.5rem', background: 'rgba(255,255,255,0.01)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.03)' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0 0.5rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                        <span>Probability of Approval Completion</span>
-                        <span>Days Elapsed from Receipt Date</span>
-                      </div>
-                      {renderSurvivalChart()}
-                    </div>
-                  </div>
+                  <ForecastPanel
+                    selectedCase={selectedCase}
+                    predictionData={predictionData}
+                    comparePredictionData={comparePredictionData}
+                    compareServiceCenter={compareServiceCenter}
+                    setCompareServiceCenter={setCompareServiceCenter}
+                    isDemoMode={isDemoMode}
+                    isLightMode={isLightMode}
+                    onTriggerAnalytics={() => {
+                      if (!isDemoMode) {
+                        api.triggerAnalytics().then(() => alert("Analytics triggered! Refresh in a few seconds."));
+                      }
+                    }}
+                  />
                 ) : activeTab === 'trends' ? (
                   renderHeatmap()
                 ) : activeTab === 'queue' ? (
-                  renderQueueInsights()
+                  (!selectedCase.filed_date || selectedCase.filed_date === '1970-01-01') ? (
+                    <MissingDataPrompt 
+                      title="Filing Receipt Date Required" 
+                      message="Add the filing receipt date under 'Edit Details' to unlock cohort queue rankings."
+                    />
+                  ) : (
+                    renderQueueInsights()
+                  )
+                ) : activeTab === 'traffic' ? (
+                  <ApiTrafficPanel isDemoMode={isDemoMode} />
                 ) : (
-                  /* Sub-Panel: Detailed Milestones View */
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                      <h3 style={{ fontSize: '1rem', color: 'var(--text-primary)', marginBottom: '0', fontFamily: 'var(--font-heading)' }}>Verified Milestone History</h3>
-                      <button 
-                        className="btn btn-secondary" 
-                        style={{ padding: '0.3rem 0.8rem', fontSize: '0.8rem', width: 'auto' }}
-                        onClick={handleShareTimeline}
-                      >
-                        <Share2 size={14} />
-                        Share Timeline
-                      </button>
-                    </div>
-                    
-                    <div id="timeline-capture-area" style={{ padding: '1rem', background: 'var(--bg-card)', borderRadius: '12px' }}>
-                      <div className="timeline">
-                        {selectedCase.milestones && selectedCase.milestones.map((m, idx) => (
-                          <div key={idx} className="timeline-item">
-                            <div className="timeline-dot active" />
-                            <div className="timeline-content">
-                              <div>
-                                <div className="timeline-title">{m.milestone_type.replace('_', ' ')}</div>
-                                <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '0.2rem' }}>
-                                  Status: {idx === selectedCase.milestones.length - 1 ? selectedCase.current_status : 'Milestone completed.'}
-                                </div>
-                              </div>
-                              <span className="timeline-date">{m.event_date}</span>
-                            </div>
-                          </div>
-                        ))}
-
-                        {/* Pending Next Milestones estimation */}
-                        {!selectedCase.completed_date && (
-                          <div className="timeline-item" style={{ opacity: 0.5 }}>
-                            <div className="timeline-dot" style={{ backgroundColor: 'var(--status-rfe)' }} />
-                            <div className="timeline-content">
-                              <div>
-                                <div className="timeline-title" style={{ color: 'var(--status-rfe)' }}>Estimated Decision Date</div>
-                                <div style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '0.2rem' }}>
-                                  Estimated completion based on Kaplan-Meier median average
-                                </div>
-                              </div>
-                              <span className="timeline-date" style={{ color: 'var(--status-rfe)', fontWeight: '600' }}>
-                                {predictionData && predictionData.median_wait_days ? 
-                                  new Date(new Date(selectedCase.filed_date).getTime() + (predictionData.median_wait_days * 24 * 60 * 60 * 1000)).toISOString().split('T')[0]
-                                  : '--'
-                                }
-                              </span>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                  <TimelinePanel
+                    selectedCase={selectedCase}
+                    predictionData={predictionData}
+                    onShare={handleShareTimeline}
+                  />
                 )}
-              </>
-            ) : (
-              <div style={{ display: 'flex', height: '240px', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
-                <Clock size={32} style={{ marginRight: '0.5rem' }} />
-                <span>Select an active case to view predictive modeling timeline charts.</span>
               </div>
-            )}
-          </div>
+            </>
+          ) : (
+            <div className="glass-card" style={{ display: 'flex', height: '240px', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
+              <Clock size={32} style={{ marginRight: '0.5rem' }} />
+              <span>Select an active case to view predictive modeling timeline charts.</span>
+            </div>
+          )}
+
 
           {/* Developer/Employer Skill Showcase Note Card */}
           <div className="glass-card" style={{ borderLeft: '4px solid var(--accent)' }}>
